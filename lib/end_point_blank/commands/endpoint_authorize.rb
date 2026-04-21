@@ -23,7 +23,8 @@ module EndPointBlank
               target_hostname: request.host,
               application: Configuration.instance.app_name,
               endpoint_version: VersionFinder.new.find(request),
-              source_ip: request.remote_ip
+              source_ip: request.remote_ip,
+              uuid: request.uuid
             }.to_json
           )
           ::Rails.logger.info "Authentication response: #{response.status} - #{response.body}"
