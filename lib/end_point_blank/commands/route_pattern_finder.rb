@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require "debug"
-
 module EndPointBlank
   module Commands
     class RoutePatternFinder
