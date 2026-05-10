@@ -1,5 +1,4 @@
 require 'singleton'
-require 'debug'
 
 module EndPointBlank
   class Configuration
