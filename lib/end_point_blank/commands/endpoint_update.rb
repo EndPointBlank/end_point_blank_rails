@@ -1,7 +1,6 @@
 #!/bin/ruby
 
 require 'excon'
-require 'debug'
 
 module EndPointBlank
   module Commands

@@ -1,5 +1,4 @@
 require "active_support/concern"
-require 'debug'
 
 module EndPointBlank
   module Rails
