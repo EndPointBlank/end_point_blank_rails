@@ -31,6 +31,8 @@ module EndPointBlank
         else
           ::Rails.logger.info "Endpoint updated successfully: #{response.status}"
         end
+      rescue Excon::Error::Socket, Excon::Error::Connection => e
+        ::Rails.logger.warn "EndPointBlank: could not reach intake to update endpoints (#{e.message})"
       end
 
       def self.update
