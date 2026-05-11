@@ -33,7 +33,7 @@ module EndPointBlank
             uuid: env['action_dispatch.request_id'],
             status: status,
             headers: headers,
-            body: truncate(body&.body),
+            body: truncate(normalize_body(body)),
             sent_at: Time.now.utc.iso8601(3),
             route: route,
             data: data,
@@ -55,10 +55,12 @@ module EndPointBlank
       def normalize_body(body)
         return nil if body.nil?
 
-        if body.respond_to?(:join)
-          body.join
-        elsif body.respond_to?(:to_ary)
-          Array(body).join
+        if body.respond_to?(:body) && !body.is_a?(Array)
+          body.body
+        elsif body.respond_to?(:each)
+          result = +""
+          body.each { |chunk| result << chunk }
+          result
         else
           body.to_s
         end
