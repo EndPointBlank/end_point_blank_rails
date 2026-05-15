@@ -67,7 +67,7 @@ module EndPointBlank
     # @return [Boolean] True if a valid token exists, false otherwise
     def exists?(arg)
       hostname = arg.downcase
-      @tokens.key?(hostname) && @tokens[hostname][:expired_at] > Time.now
+      @tokens.key?(hostname) && @tokens[hostname][:expired_at] > Time.now + 30
     end
   end
 end
