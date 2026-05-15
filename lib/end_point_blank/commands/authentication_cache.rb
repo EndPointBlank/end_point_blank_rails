@@ -4,9 +4,13 @@ require 'singleton'
 
 module EndPointBlank
   module Commands
-    # Thread-safe singleton cache for storing authentication credentials
+    # Thread-safe singleton cache for storing authentication credentials.
+    # Capped at MAX_SIZE entries. When full, expired entries are evicted first;
+    # if still at capacity the entry expiring soonest is removed.
     class AuthenticationCache
       include Singleton
+
+      MAX_SIZE = 1000
 
       def initialize
         @cache = {}
@@ -18,8 +22,17 @@ module EndPointBlank
       # @param credentials [Object] The credentials to store
       # @return [Object] The stored credentials
       def store(key, credentials)
+        return unless credentials
         @mutex.synchronize do
-          @cache[key] = { expired_at: Time.now + ::EndPointBlank::Configuration.instance.cache_ttl, credentials: credentials } if credentials
+          now = Time.now
+          # Evict expired entries first
+          @cache.delete_if { |_, v| v[:expired_at] <= now }
+          # Evict the entry expiring soonest if still at capacity
+          if @cache.size >= MAX_SIZE
+            oldest_key = @cache.min_by { |_, v| v[:expired_at] }.first
+            @cache.delete(oldest_key)
+          end
+          @cache[key] = { expired_at: now + ::EndPointBlank::Configuration.instance.cache_ttl, credentials: credentials }
         end
       end
 
