@@ -4,7 +4,7 @@ module EndPointBlank
   module Commands
     module Http
       MAX_ATTEMPTS = 3
-      RETRY_DELAY  = 0.5
+      RETRY_DELAY  = 0.2
 
       def self.post(url, auth, body)
         attempt = 0
