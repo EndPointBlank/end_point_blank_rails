@@ -1,6 +1,6 @@
 #!/bin/ruby
 
-require 'excon'
+require_relative 'http'
 
 module EndPointBlank
   module Commands
@@ -12,29 +12,22 @@ module EndPointBlank
 
         def authenticate(request)
           client_auth = request.headers['Authorization']
-          auth = AuthorizationGenerate.generate
-          puts "Authenticating request: #{request.request_method} #{request.path} with client_auth: #{client_auth}"
-          response = Excon.post(configuration.authorize_url,
-            headers: {'Authorization' => "Basic #{auth}", 'Content-Type' => 'application/json'},
-            body: {
-              path: request.route_uri_pattern.to_s.gsub(/\([^)]*\)/, ''),
-              http_method: request.request_method,
-              client_auth: client_auth,
-              application: Configuration.instance.app_name,
-              endpoint_version: VersionFinder.new.find(request),
-              ip_address: request.remote_ip
-            }.to_json
-          )
+          auth = "Basic #{AuthorizationGenerate.generate}"
+          body = {
+            path: request.route_uri_pattern.to_s.gsub(/\([^)]*\)/, ''),
+            http_method: request.request_method,
+            client_auth: client_auth,
+            application: Configuration.instance.app_name,
+            endpoint_version: VersionFinder.new.find(request),
+            ip_address: request.remote_ip
+          }
+          response = Http.post(configuration.authorize_url, auth, body)
+          return nil if response.nil?
           ::Rails.logger.info "Authentication response: #{response.status} - #{response.body}"
           if response.status > 299
-            ::Rails.logger.error "Failed to update endpoint: #{response.status} - #{response.body}"
-          else
-            ::Rails.logger.info "Endpoint updated successfully: #{response.status}"
+            ::Rails.logger.error "Failed to authenticate: #{response.status} - #{response.body}"
           end
           response
-        rescue => e
-          ::Rails.logger.error "Error occurred during authentication: #{e.message}\n #{e.backtrace.join("\n")}"
-          nil
         end
       end
 

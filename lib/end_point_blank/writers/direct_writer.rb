@@ -1,3 +1,4 @@
+require_relative '../commands/http'
 
 module EndPointBlank
   module Writers
@@ -10,10 +11,7 @@ module EndPointBlank
 
       def write(list)
         auth = EndPointBlank::Authorization.header
-        response = Excon.post(@url,
-          headers: {'Authorization' => auth, 'Content-Type' => 'application/json'},
-          body: {payload: list}.to_json
-        )
+        EndPointBlank::Commands::Http.post(@url, auth, { payload: list })
       end
     end
   end
