@@ -24,18 +24,26 @@ module EndPointBlank
           cache = AuthenticationCache.instance
           return CachedResponse.new(201, '') if cache.exists?(cache_key)
 
-          auth = Authorization.header
+          hostname = request.host
+          auth = Authorization.header(hostname)
           body = {
             path: path,
             http_method: method,
             client_auth: client_auth,
-            target_hostname: request.host,
+            target_hostname: hostname,
             application: app_name,
             endpoint_version: VersionFinder.new.find(request),
             source_ip: request.remote_ip,
             uuid: request.uuid
           }
           response = Http.post(configuration.authorize_url, auth, body)
+
+          if response&.status == 401 && auth.to_s.start_with?("Bearer ")
+            EndPointBlank::AccessTokens.instance.remove(hostname)
+            auth = Authorization.header(hostname)
+            response = Http.post(configuration.authorize_url, auth, body)
+          end
+
           return nil if response.nil?
           ::Rails.logger.info "Authentication response: #{response.status} - #{response.body}"
           if response.status == 201
