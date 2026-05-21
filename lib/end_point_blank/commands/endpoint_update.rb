@@ -22,6 +22,10 @@ module EndPointBlank
       end
 
       def write(data)
+        ::Rails.logger.info "[EndPointBlank] Sending application update: " \
+          "application=#{data[:application]} environment=#{data[:environment]} " \
+          "app_version=#{data[:app_version]}"
+
         response = Excon.post(configuration.endpoint_update_url,
           headers: {'Authorization' => auth, 'Content-Type' => 'application/json'},
           body: data.to_json
