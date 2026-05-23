@@ -47,9 +47,9 @@ module EndPointBlank
 
       private
       def truncate(body)
-        return body if body.nil? || body.length > 1030
+        return body if body.nil? || body.length <= 1024
 
-        body[0..1024] + "..."
+        body[0...1024] + "..."
       end
 
       def normalize_body(body)
