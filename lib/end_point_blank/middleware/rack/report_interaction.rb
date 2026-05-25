@@ -22,8 +22,16 @@ module EndPointBlank
           [status, headers, body]
         rescue ::EndPointBlank::UnauthorizedError => e
           # We don't want to log unauthorized errors as they are expected to happen
+          status ||= e.respond_to?(:status) && e.status || 401
+          body ||= e.message
           raise e
         rescue Exception => e
+          # The exception will be rendered by ActionDispatch::DebugExceptions
+          # (or ShowExceptions in prod), which sits outside this middleware,
+          # so we never see the rendered status / body. Synthesize them so the
+          # response row still gets recorded — intake requires a non-nil status.
+          status ||= 500
+          body ||= "#{e.class}: #{e.message}"
           Writers::ExceptionWriter.write(e)
 
           raise e
