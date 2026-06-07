@@ -42,7 +42,7 @@ module EndPointBlank
       end
 
       def write()
-        enqueue(payload)
+        enqueue(apply_masking(payload, :request))
       end
 
       private

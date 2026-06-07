@@ -6,7 +6,8 @@ module EndPointBlank
 
     attr_accessor :client_id, :client_secret, :base_url, :log_base_url,
           :environment, :app_name, :worker_count, :log_mode,
-          :version_finder, :application_version, :token_ttl, :cache_ttl
+          :version_finder, :application_version, :token_ttl, :cache_ttl,
+          :masking_rules, :mask_hook
 
     def initialize
       @base_url = 'https://in.endpointblank.com'
@@ -14,6 +15,8 @@ module EndPointBlank
       @worker_count = 4
       @token_ttl = nil
       @cache_ttl = 300
+      @masking_rules = []
+      @mask_hook = nil
     end
 
     def endpoint_update_url
