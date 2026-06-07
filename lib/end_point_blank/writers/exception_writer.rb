@@ -35,8 +35,15 @@ module EndPointBlank
       end
 
       def write(exception)
-        json = payload(exception)
-        enqueue(json)
+        p = payload(exception)
+        rack_req = ::EndPointBlank::Rack::EnvStore.request
+        if rack_req
+          p = p.merge(
+            stamped_path: rack_req.path,
+            stamped_http_method: rack_req.request_method
+          )
+        end
+        enqueue(apply_masking(p, :error))
       end
     end
   end

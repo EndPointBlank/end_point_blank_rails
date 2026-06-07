@@ -55,6 +55,13 @@ module EndPointBlank
 
       def write(message, level, data = {})
         json = payload(message: message, level: level, data: data)
+        rack_req = ::EndPointBlank::Rack::EnvStore.request
+        if rack_req
+          json = json.merge(
+            stamped_path: rack_req.path,
+            stamped_http_method: rack_req.request_method
+          )
+        end
         puts "Writing log: #{json}"
         enqueue(json)
       end

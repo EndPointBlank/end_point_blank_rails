@@ -42,7 +42,7 @@ module EndPointBlank
       end
 
       def write(status:, headers: {}, body: nil, data: {})
-        enqueue(payload(status:, headers:, body:, data:))
+        enqueue(apply_masking(payload(status:, headers:, body:, data:), :response))
       end
 
       private
