@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require "end_point_blank_rack"
+require "end_point_blank"
 
 RSpec.configure do |config|
   # Enable flags like --only-failures and --next-failure

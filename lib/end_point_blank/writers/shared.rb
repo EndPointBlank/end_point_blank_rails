@@ -22,6 +22,10 @@ module EndPointBlank
       def source_application_environment_id
         ::EndPointBlank::Rack::EnvStore.source_application_environment_id
       end
+
+      def apply_masking(payload, record_type)
+        EndPointBlank::Masking.apply(payload, record_type, configuration.masking_rules, configuration.mask_hook)
+      end
     end
   end
 end
