@@ -97,16 +97,16 @@ module EndPointBlank
     end
 
     def replacement(rule)
-      rule[:replacement_value]
+      (rule[:replacement_value] || rule["replacement_value"] || "...").to_s
     end
 
     # Compiles rule[:regex]; blank/nil/invalid ⇒ nil (regex step no-ops).
     def compiled_regex(rule)
-      source = rule[:regex]
+      source = rule[:regex] || rule["regex"]
       return nil if source.nil? || source == ""
 
       Regexp.new(source)
-    rescue RegexpError
+    rescue RegexpError, TypeError
       nil
     end
 
