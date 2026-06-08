@@ -78,7 +78,10 @@ module EndPointBlank
 
     # Applies the rule to a structured value (decoded JSON or header Hash).
     def apply_to_value(value, rule)
-      tokens = parse_path(rule[:path])
+      path = rule[:path] || rule["path"]
+      tokens = parse_path(path)
+      return value if tokens.nil? && path.is_a?(String) && path != ""
+
       re = compiled_regex(rule)
       repl = replacement(rule)
 
