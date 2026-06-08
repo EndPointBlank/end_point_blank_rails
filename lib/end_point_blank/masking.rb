@@ -73,7 +73,7 @@ module EndPointBlank
       re = compiled_regex(rule)
       return value unless re
 
-      value.gsub(re, replacement(rule))
+      regex_replace_all(re, value, replacement(rule))
     end
 
     # Applies the rule to a structured value (decoded JSON or header Hash).
@@ -113,11 +113,55 @@ module EndPointBlank
     # Recurse over containers; substitute on every string leaf.
     def regex_replace_leaves(node, re, repl)
       case node
-      when String then node.gsub(re, repl)
+      when String then regex_replace_all(re, node, repl)
       when Hash then node.each_with_object({}) { |(k, v), out| out[k] = regex_replace_leaves(v, re, repl) }
       when Array then node.map { |e| regex_replace_leaves(e, re, repl) }
       else node
       end
+    end
+
+    # --- Replacement backreferences (shared contract) --------------------------
+    #
+    # In a regex substitution, replacement_value is a TEMPLATE. For each match we
+    # build the replacement ourselves (NOT Ruby's native \N substitution):
+    #   $$         → literal "$"
+    #   $<digits>  → capture group N (full consecutive digit run); 0 = whole
+    #                match; missing/non-participating group → "".
+    #   lone/trailing $ before a non-digit → literal "$".
+    # groups is 0-indexed: groups[0] = whole match, groups[n] = nth capture.
+
+    def regex_replace_all(regexp, string, template)
+      string.gsub(regexp) do
+        m = Regexp.last_match
+        groups = (0...m.size).map { |i| m[i] }
+        expand(template, groups)
+      end
+    end
+
+    def expand(template, groups)
+      out = +""
+      i = 0
+      len = template.length
+      while i < len
+        ch = template[i]
+        if ch != "$"
+          out << ch
+          i += 1
+        elsif template[i + 1] == "$"
+          out << "$"
+          i += 2
+        elsif template[i + 1] =~ /\d/
+          j = i + 1
+          j += 1 while j < len && template[j] =~ /\d/
+          n = template[(i + 1)...j].to_i
+          out << (groups[n] || "")
+          i = j
+        else
+          out << "$"
+          i += 1
+        end
+      end
+      out
     end
 
     # --- Constrained JSONPath subset (mirrors intake's JsonPath) ---------------

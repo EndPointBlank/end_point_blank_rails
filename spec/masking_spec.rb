@@ -155,6 +155,78 @@ RSpec.describe EndPointBlank::Masking do
     end
   end
 
+  describe "replacement backreferences" do
+    it "regex-only: $1-XX-XXXX expands group 1 (SSN vector)" do
+      payload = { request: '{"v":"123-45-6789"}' }
+      out = described_class.apply(payload, :request, [rule(target: "request_body", regex: '(\d{3})-(\d{2})-(\d{4})', replacement: "$1-XX-XXXX")], nil)
+      expect(JSON.parse(out[:request])).to eq("v" => "123-XX-XXXX")
+    end
+
+    it "path + regex: $1-****-****-$2 expands groups (card vector)" do
+      payload = { request: '{"card":"4111-1111-1111-1234"}' }
+      out = described_class.apply(payload, :request, [rule(target: "request_body", path: "$.card", regex: '(\d{4})-\d{4}-\d{4}-(\d{4})', replacement: "$1-****-****-$2")], nil)
+      expect(JSON.parse(out[:request])).to eq("card" => "4111-****-****-1234")
+    end
+
+    it "global multi-match: [$1] expands per match" do
+      payload = { request: '{"v":"ab1c2"}' }
+      out = described_class.apply(payload, :request, [rule(target: "request_body", regex: '(\d)', replacement: "[$1]")], nil)
+      expect(JSON.parse(out[:request])).to eq("v" => "ab[1]c[2]")
+    end
+
+    it "reorders groups: $2/$1" do
+      payload = { request: '{"v":"12-34"}' }
+      out = described_class.apply(payload, :request, [rule(target: "request_body", regex: '(\d+)-(\d+)', replacement: "$2/$1")], nil)
+      expect(JSON.parse(out[:request])).to eq("v" => "34/12")
+    end
+
+    it "out-of-range group $3 expands to empty" do
+      payload = { request: '{"v":"42"}' }
+      out = described_class.apply(payload, :request, [rule(target: "request_body", regex: '(\d+)', replacement: "$3")], nil)
+      expect(JSON.parse(out[:request])).to eq("v" => "")
+    end
+
+    it "no-group regex with $1 expands to empty" do
+      payload = { request: '{"v":"x42y"}' }
+      out = described_class.apply(payload, :request, [rule(target: "request_body", regex: '\d+', replacement: "$1")], nil)
+      expect(JSON.parse(out[:request])).to eq("v" => "xy")
+    end
+
+    it "$$ is a literal dollar" do
+      payload = { request: '{"v":"5"}' }
+      out = described_class.apply(payload, :request, [rule(target: "request_body", regex: '\d', replacement: "$$")], nil)
+      expect(JSON.parse(out[:request])).to eq("v" => "$")
+    end
+
+    it "$0 is the whole match" do
+      payload = { request: '{"v":"abc"}' }
+      out = described_class.apply(payload, :request, [rule(target: "request_body", regex: 'b', replacement: "<$0>")], nil)
+      expect(JSON.parse(out[:request])).to eq("v" => "a<b>c")
+    end
+
+    it "multi-digit group number $12 reads the full digit run" do
+      groups = (0..12).map { |i| "g#{i}" }
+      expect(described_class.expand("$12", groups)).to eq("g12")
+    end
+
+    it "trailing $ and lone $ before non-digit are literal" do
+      expect(described_class.expand("a$", ["m"])).to eq("a$")
+      expect(described_class.expand("a$x", ["m"])).to eq("a$x")
+    end
+
+    it "path-only replacement stays literal (no token expansion)" do
+      payload = { request: '{"card":"4111-1111-1111-1234"}' }
+      out = described_class.apply(payload, :request, [rule(target: "request_body", path: "$.card", replacement: "$1-no-expand")], nil)
+      expect(JSON.parse(out[:request])).to eq("card" => "$1-no-expand")
+    end
+
+    it "regex on raw (non-JSON) string expands backreferences" do
+      payload = { message: "ssn 123-45-6789 end" }
+      out = described_class.apply(payload, :error, [rule(target: "error_message", regex: '(\d{3})-(\d{2})-(\d{4})', replacement: "$1-XX-XXXX")], nil)
+      expect(out[:message]).to eq("ssn 123-XX-XXXX end")
+    end
+  end
+
   describe "JSONPath parser" do
     it "parses bracketed quoted child names with special chars" do
       payload = { request: '{"a.b":{"x":1}}' }
