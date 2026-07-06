@@ -1,5 +1,7 @@
 #!/bin/ruby
 
+require 'base64'
+
 module EndPointBlank
   module AuthorizationMethods
     module ClassMethods
