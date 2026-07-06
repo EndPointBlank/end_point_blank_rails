@@ -1,6 +1,7 @@
 #!/bin/ruby
 
 require 'excon'
+require_relative 'http'
 
 module EndPointBlank
   module Commands
@@ -28,14 +29,21 @@ module EndPointBlank
 
         response = Excon.post(configuration.endpoint_update_url,
           headers: {'Authorization' => auth, 'Content-Type' => 'application/json'},
-          body: data.to_json
+          body: data.to_json,
+          **EndPointBlank::Commands::Http::TIMEOUT_OPTIONS
         )
         if response.status > 299
           ::Rails.logger.error "Failed to update endpoint: #{response.status} - #{response.body}"
         else
           ::Rails.logger.info "Endpoint updated successfully: #{response.status}"
         end
-      rescue Excon::Error::Socket, Excon::Error::Connection => e
+      rescue Excon::Error => e
+        # Was `rescue Excon::Error::Socket, Excon::Error::Connection` -
+        # Excon::Error::Connection does not exist in this excon version, so
+        # that clause raised NameError instead of catching anything, and a
+        # timeout (Excon::Error::Timeout) would have crashed the caller.
+        # Rescuing Excon::Error catches every transport failure, including
+        # timeouts, without letting this fire-and-forget call ever raise.
         ::Rails.logger.warn "EndPointBlank: could not reach intake to update endpoints (#{e.message})"
       end
 

@@ -1,6 +1,7 @@
 #!/bin/ruby
 
 require 'excon'
+require_relative 'http'
 
 module EndPointBlank
   module Commands
@@ -18,7 +19,8 @@ module EndPointBlank
           auth = Authorization.header
           response = Excon.post(configuration.access_token_url,
             headers: {'Authorization' => auth, 'Content-Type' => 'application/json'},
-            body: body.to_json
+            body: body.to_json,
+            **EndPointBlank::Commands::Http::TIMEOUT_OPTIONS
           )
           ::Rails.logger.info "Authentication response: #{response.status} - #{response.body}"
           response.body.is_a?(String) ? JSON.parse(response.body).symbolize_keys : response.body.symbolize_keys

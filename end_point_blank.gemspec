@@ -34,6 +34,9 @@ Gem::Specification.new do |spec|
   # Uncomment to register a new dependency of your gem
   spec.add_dependency "excon", "~> 1.0"
   spec.add_dependency "rexml"
+  # Base64 was removed from Ruby's default gems as of 3.4; Authorization
+  # uses it for the Basic-auth header, so declare it explicitly.
+  spec.add_dependency "base64"
   spec.add_development_dependency "debug", ">= 1.0.0"
 
   # For more information and examples about making a new gem, check out our
