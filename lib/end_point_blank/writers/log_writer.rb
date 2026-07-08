@@ -38,8 +38,7 @@ module EndPointBlank
 
       def payload(message: message, level: level, data: data)
         env = ::EndPointBlank::Rack::EnvStore.get
-        request = ActionDispatch::Request.new(env)
-        uuid = request.uuid
+        uuid = request_uuid(env)
 
         {
           message: message,

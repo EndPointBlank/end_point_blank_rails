@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "logger"
+require "rack"
 
 require_relative "end_point_blank/access_tokens"
 require_relative "end_point_blank/authorization"

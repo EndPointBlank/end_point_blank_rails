@@ -23,6 +23,14 @@ module EndPointBlank
         ::EndPointBlank::Rack::EnvStore.source_application_environment_id
       end
 
+      # Rails' ActionDispatch::Request#uuid simply reads this same Rack env
+      # key, so this is behavior-preserving when running under Rails, and
+      # gracefully returns nil when it isn't (plain Rack / Sinatra), instead
+      # of requiring actionpack's ActionDispatch::Request to be loaded.
+      def request_uuid(env)
+        env && env["action_dispatch.request_id"]
+      end
+
       def apply_masking(payload, record_type)
         EndPointBlank::Masking.apply(payload, record_type, configuration.masking_rules, configuration.mask_hook)
       end

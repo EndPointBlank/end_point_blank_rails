@@ -37,6 +37,10 @@ RSpec.describe "EndPointBlank core without ::Rails" do
     expect(defined?(::Rails)).to be_falsey
   end
 
+  it "confirms ::ActionDispatch is not defined in this spec environment (sanity check)" do
+    expect(defined?(::ActionDispatch)).to be_falsey
+  end
+
   it "configures the client without ::Rails defined" do
     expect do
       EndPointBlank.configure do |c|
@@ -90,6 +94,95 @@ RSpec.describe "EndPointBlank core without ::Rails" do
       expect(EndPointBlank::Writers::ResponseWriter).to have_received(:write).with(
         status: 500, headers: { "Accept" => "application/json" }, body: "RuntimeError: kaboom"
       )
+    end
+  end
+
+  # Unlike the middleware spec above (which stubs the Writers' `.write` boundary),
+  # these specs exercise the *real* RequestWriter/LogWriter/ExceptionWriter
+  # payload-building code against a plain Rack env, with ::Rails and
+  # ::ActionDispatch both undefined. Each Writer Singleton's `.write` also
+  # spins up background threads that drain a queue by POSTing (via
+  # EndPointBlank::Commands::Http, which wraps excon) -- that HTTP egress is
+  # stubbed at the `#enqueue` boundary instead of let asynchronously racing
+  # against example teardown, since what's under test here is the
+  # synchronous, framework-agnostic payload-building path, not the
+  # (unrelated, already-covered) background delivery mechanics.
+  describe "Writers building a real payload from a plain Rack env" do
+    let(:env) do
+      {
+        "action_dispatch.request_id" => "abc-123",
+        "REQUEST_METHOD" => "GET",
+        "PATH_INFO" => "/x",
+        "SERVER_NAME" => "example.test",
+        "SERVER_PORT" => "80",
+        "rack.input" => StringIO.new(""),
+        # RequestWriter#payload reads env_name via SessionConfiguration, which
+        # (independent of the ActionDispatch/Rack::Request swap under test
+        # here) expects a "puma.config" entry; unrelated to this task, so it
+        # is stubbed just enough to let payload building complete.
+        "puma.config" => double(options: { environment: "test" })
+      }
+    end
+
+    before { EndPointBlank::Rack::EnvStore.set(env) }
+    after { EndPointBlank::Rack::EnvStore.clear }
+
+    it "builds a RequestWriter payload from ::Rack::Request, without ActionDispatch" do
+      payload = nil
+      expect { payload = EndPointBlank::Writers::RequestWriter.instance.payload }.not_to raise_error
+
+      expect(payload[:uuid]).to eq("abc-123")
+      expect(payload[:http_method]).to eq("GET")
+      expect(payload[:path]).to eq("/x")
+    end
+
+    it "writes a real RequestWriter payload without raising (HTTP egress stubbed)" do
+      writer = EndPointBlank::Writers::RequestWriter.instance
+      enqueued = nil
+      allow(writer).to receive(:enqueue) { |payload| enqueued = payload }
+
+      expect { EndPointBlank::Writers::RequestWriter.write }.not_to raise_error
+
+      expect(enqueued[:uuid]).to eq("abc-123")
+      expect(enqueued[:http_method]).to eq("GET")
+      expect(enqueued[:path]).to eq("/x")
+    end
+
+    it "builds a LogWriter payload carrying the request id from the Rack env, without ActionDispatch" do
+      payload = nil
+      expect do
+        payload = EndPointBlank::Writers::LogWriter.instance.payload(message: "hi", level: :info, data: {})
+      end.not_to raise_error
+
+      expect(payload[:uuid]).to eq("abc-123")
+    end
+
+    it "writes a real LogWriter payload without raising (HTTP egress stubbed)" do
+      writer = EndPointBlank::Writers::LogWriter.instance
+      enqueued = nil
+      allow(writer).to receive(:enqueue) { |payload| enqueued = payload }
+
+      expect { EndPointBlank::Writers::LogWriter.write("hi", :info) }.not_to raise_error
+
+      expect(enqueued[:uuid]).to eq("abc-123")
+    end
+
+    it "builds an ExceptionWriter payload carrying the request id from the Rack env, without ActionDispatch" do
+      exception = RuntimeError.new("boom")
+      payload = nil
+      expect { payload = EndPointBlank::Writers::ExceptionWriter.instance.payload(exception) }.not_to raise_error
+
+      expect(payload[:uuid]).to eq("abc-123")
+    end
+
+    it "writes a real ExceptionWriter payload without raising (HTTP egress stubbed)" do
+      writer = EndPointBlank::Writers::ExceptionWriter.instance
+      enqueued = nil
+      allow(writer).to receive(:enqueue) { |payload| enqueued = payload }
+
+      expect { EndPointBlank::Writers::ExceptionWriter.write(RuntimeError.new("boom")) }.not_to raise_error
+
+      expect(enqueued[:uuid]).to eq("abc-123")
     end
   end
 end
