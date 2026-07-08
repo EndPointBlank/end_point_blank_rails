@@ -9,6 +9,10 @@ module EndPointBlank
         app.config.middleware.insert_after ActionDispatch::DebugExceptions,
                                           EndPointBlank::Middleware::Rack::ReportInteraction
       end
+
+      initializer 'endpointblank.logger.rails' do
+        EndPointBlank::Configuration.instance.logger ||= ::Rails.logger
+      end
     end
   end
 end

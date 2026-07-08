@@ -5,10 +5,9 @@ require "end_point_blank/commands/http"
 
 RSpec.describe EndPointBlank::Commands::Http do
   let(:logger) { double("logger", error: nil, warn: nil, info: nil) }
-  let(:rails_double) { double("Rails", logger: logger) }
 
   before do
-    stub_const("Rails", rails_double)
+    allow(EndPointBlank).to receive(:logger).and_return(logger)
   end
 
   describe "::post" do

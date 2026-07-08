@@ -10,15 +10,15 @@ module EndPointBlank
       end
 
       def self.error(message)
-        ::Rails.logger.error(message)
+        EndPointBlank.logger.error(message)
       end
 
       def self.warn(message)
-        ::Rails.logger.warn(message)
+        EndPointBlank.logger.warn(message)
       end
 
       def self.fatal(message)
-        ::Rails.logger.fatal(message)
+        EndPointBlank.logger.fatal(message)
       end
 
       private

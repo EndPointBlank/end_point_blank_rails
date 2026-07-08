@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'singleton'
+require "time"
 
 module EndPointBlank
   # Thread-safe singleton cache for storing access tokens per hostname
@@ -24,19 +25,17 @@ module EndPointBlank
       @mutexes[hostname] ||= Mutex.new
       @mutexes[hostname].synchronize do
         # Return cached token if it exists and is not expired
-        if @tokens.key?(hostname) && @tokens[hostname][:expired_at] > 2.minutes.from_now
-          return @tokens[hostname][:token]
-        end
+        return @tokens[hostname][:token] if @tokens.key?(hostname) && @tokens[hostname][:expired_at] > Time.now + 120
 
         # Fetch new token
         payload = Commands::GenerateAccessToken.token(hostname)
 
         if payload && payload[:token]
-          payload[:expired_at] = DateTime.parse(payload[:expired_at])
+          payload[:expired_at] = Time.parse(payload[:expired_at])
           @tokens[hostname] = payload
           payload[:token]
         else
-          ::Rails.logger.error "Failed to generate access token for #{hostname}: #{payload&.fetch('error')}"
+          EndPointBlank.logger.error "Failed to generate access token for #{hostname}: #{payload&.fetch('error')}"
           nil
         end
       end

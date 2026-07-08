@@ -5,13 +5,12 @@ require "end_point_blank/commands/endpoint_update"
 
 RSpec.describe EndPointBlank::Commands::EndpointUpdate do
   let(:logger) { double("logger", error: nil, warn: nil, info: nil) }
-  let(:rails_double) { double("Rails", logger: logger) }
   let(:configuration) { EndPointBlank::Configuration.instance }
   let(:updater) { described_class.new }
   let(:data) { { application: "app", environment: "test", app_version: "1.0" } }
 
   before do
-    stub_const("Rails", rails_double)
+    allow(EndPointBlank).to receive(:logger).and_return(logger)
     configuration.client_id = "id"
     configuration.client_secret = "secret"
   end

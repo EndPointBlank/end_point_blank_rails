@@ -42,11 +42,11 @@ module EndPointBlank
         end
 
         def on_success(response)
-          Rails.logger.debug("Successfully reported interaction: #{response.body}")
+          EndPointBlank.logger.debug("Successfully reported interaction: #{response.body}")
         end
 
         def on_failure(response)
-          Rails.logger.error("Failed to report interaction: #{response.body}")
+          EndPointBlank.logger.error("Failed to report interaction: #{response.body}")
         end
       end
     end

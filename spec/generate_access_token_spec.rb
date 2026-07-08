@@ -5,11 +5,10 @@ require "end_point_blank/commands/generate_access_token"
 
 RSpec.describe EndPointBlank::Commands::GenerateAccessToken do
   let(:logger) { double("logger", error: nil, warn: nil, info: nil) }
-  let(:rails_double) { double("Rails", logger: logger) }
   let(:configuration) { EndPointBlank::Configuration.instance }
 
   before do
-    stub_const("Rails", rails_double)
+    allow(EndPointBlank).to receive(:logger).and_return(logger)
     configuration.client_id = "id"
     configuration.client_secret = "secret"
   end

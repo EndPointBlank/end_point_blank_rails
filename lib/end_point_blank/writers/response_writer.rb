@@ -30,7 +30,7 @@ module EndPointBlank
         {
             app_name: app_name,
             env: env_name,
-            uuid: env['action_dispatch.request_id'],
+            uuid: request_uuid(env),
             status: status,
             headers: headers,
             body: truncate(normalize_body(body)),

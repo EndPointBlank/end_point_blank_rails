@@ -22,19 +22,19 @@ module EndPointBlank
 
       def payload
         env = ::EndPointBlank::Rack::EnvStore.get
-        request = ActionDispatch::Request.new(env)
+        request = ::Rack::Request.new(env)
         version = Commands::VersionFinder.new.find(request)
         headers = ::EndPointBlank::Rack::Headers.extract
 
         payload = {
           app_name: EndPointBlank::Configuration.instance.app_name,
           env: SessionConfiguration.env_name,
-          uuid: request.uuid,
+          uuid: request_uuid(env),
           host: request.host,
           status: request_status(request),
           headers: headers,
           path: request.path,
-          http_method: request.method,
+          http_method: request.request_method,
           endpoint_version: version,
           request: request_body(request),
           sent_at: Time.now.utc.iso8601(3)

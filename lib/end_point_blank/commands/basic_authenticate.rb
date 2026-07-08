@@ -23,9 +23,9 @@ module EndPointBlank
           }
           response = Http.post(configuration.authorize_url, auth, body)
           return nil if response.nil?
-          ::Rails.logger.info "Authentication response: #{response.status} - #{response.body}"
+          EndPointBlank.logger.info "Authentication response: #{response.status} - #{response.body}"
           if response.status > 299
-            ::Rails.logger.error "Failed to authenticate: #{response.status} - #{response.body}"
+            EndPointBlank.logger.error "Failed to authenticate: #{response.status} - #{response.body}"
           end
           response
         end

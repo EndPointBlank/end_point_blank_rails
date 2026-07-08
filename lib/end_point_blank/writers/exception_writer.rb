@@ -22,11 +22,11 @@ module EndPointBlank
 
       def payload(exception)
         env = ::EndPointBlank::Rack::EnvStore.get
-        request = ActionDispatch::Request.new(env)
+        request = ::Rack::Request.new(env)
         version = Commands::VersionFinder.new.find(request)
         {
           app_name: app_name,
-          uuid: request.uuid,
+          uuid: request_uuid(env),
           message: exception.message,
           stacktrace: exception.backtrace,
           sent_at: Time.now.utc.iso8601(3),
