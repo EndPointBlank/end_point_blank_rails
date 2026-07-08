@@ -3,6 +3,7 @@
 require "spec_helper"
 require "end_point_blank/writers/delayed_writer"
 
+# rubocop:disable Metrics/BlockLength
 RSpec.describe EndPointBlank::Writers::DelayedWriter do
   # A bare double that mixes in the module under test without starting the
   # background drain threads, so we can inspect the queue synchronously.
@@ -47,4 +48,48 @@ RSpec.describe EndPointBlank::Writers::DelayedWriter do
       expect(writer.queue.pop).to eq(10)
     end
   end
+
+  describe "#worker_count" do
+    after do
+      EndPointBlank::Configuration.instance.worker_count = 4
+    end
+
+    it "honors EndPointBlank::Configuration.instance.worker_count when set" do
+      EndPointBlank::Configuration.instance.worker_count = 7
+
+      expect(writer.worker_count).to eq(7)
+    end
+
+    it "falls back to the historical default (2) when worker_count is nil" do
+      EndPointBlank::Configuration.instance.worker_count = nil
+
+      expect(writer.worker_count).to eq(EndPointBlank::Writers::DelayedWriter::DEFAULT_WORKER_COUNT)
+      expect(writer.worker_count).to eq(2)
+    end
+  end
+
+  describe "#start_threads" do
+    after do
+      EndPointBlank::Configuration.instance.worker_count = 4
+      writer.instance_variable_get(:@threads)&.each(&:kill)
+    end
+
+    it "spawns one thread per configured worker_count" do
+      EndPointBlank::Configuration.instance.worker_count = 3
+
+      writer.start_threads
+
+      expect(writer.instance_variable_get(:@threads).size).to eq(3)
+    end
+
+    it "spawns the default number of threads when worker_count is nil" do
+      EndPointBlank::Configuration.instance.worker_count = nil
+
+      writer.start_threads
+
+      expect(writer.instance_variable_get(:@threads).size)
+        .to eq(EndPointBlank::Writers::DelayedWriter::DEFAULT_WORKER_COUNT)
+    end
+  end
 end
+# rubocop:enable Metrics/BlockLength

@@ -12,6 +12,7 @@ Gem::Specification.new do |spec|
   spec.description = "EndPointBlank client library for Ruby. A framework-agnostic core runs in plain Ruby / Sinatra, with Rails supported as an auto-loaded adapter. Provides API endpoint tracking, authorization, and error/request/response/log reporting."
   spec.homepage = "https://github.com/EndPointBlank/end_point_blank_rails"
   spec.required_ruby_version = ">= 3.4.2"
+  spec.license = "Nonstandard"
 
   spec.metadata["allowed_push_host"] = "https://rubygems.org"
 
