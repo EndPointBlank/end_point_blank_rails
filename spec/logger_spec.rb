@@ -28,6 +28,10 @@ RSpec.describe "EndPointBlank.logger" do
     expect(EndPointBlank.logger).to be_a(::Logger)
   end
 
+  it "defaults the logger level to INFO so debug lines are suppressed" do
+    expect(EndPointBlank.logger.level).to eq(::Logger::INFO)
+  end
+
   it "memoizes the default logger across calls" do
     expect(EndPointBlank.logger).to equal(EndPointBlank.logger)
   end

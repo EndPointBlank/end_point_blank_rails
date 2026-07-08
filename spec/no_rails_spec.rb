@@ -182,6 +182,35 @@ RSpec.describe "EndPointBlank core without ::Rails" do
 
       expect(enqueued[:uuid]).to eq("abc-123")
     end
+
+    # ResponseWriter#payload additionally reaches Commands::VersionFinder and
+    # Commands::RoutePatternFinder, both of which are Rails-only lookups
+    # (::Rails.application routing / ActionDispatch-only #path_parameters).
+    # This proves neither raises with ::Rails undefined, and both resolve to
+    # nil instead -- rather than raising (and being rescue-swallowed, in
+    # RoutePatternFinder's case, with a stray `puts`) on every response in a
+    # plain Ruby / Sinatra host application.
+    it "builds a real ResponseWriter payload without raising, resolving route/version to nil" do
+      payload = nil
+      expect do
+        payload = EndPointBlank::Writers::ResponseWriter.instance.payload(status: 200, headers: {}, body: "ok")
+      end.not_to raise_error
+
+      expect(payload[:uuid]).to eq("abc-123")
+      expect(payload[:status]).to eq(200)
+      expect(payload[:route]).to be_nil
+    end
+
+    it "writes a real ResponseWriter payload without raising (HTTP egress stubbed)" do
+      writer = EndPointBlank::Writers::ResponseWriter.instance
+      enqueued = nil
+      allow(writer).to receive(:enqueue) { |payload| enqueued = payload }
+
+      expect { EndPointBlank::Writers::ResponseWriter.write(status: 200, headers: {}, body: "ok") }.not_to raise_error
+
+      expect(enqueued[:uuid]).to eq("abc-123")
+      expect(enqueued[:route]).to be_nil
+    end
   end
 end
 # rubocop:enable Metrics/BlockLength

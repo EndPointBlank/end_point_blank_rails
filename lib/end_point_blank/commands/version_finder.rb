@@ -47,6 +47,7 @@ module EndPointBlank
       private
 
       def version_from_controller(request)
+        return nil unless defined?(::Rails)
         return nil unless request.respond_to?(:path_parameters)
 
         controller_name = request.path_parameters[:controller]

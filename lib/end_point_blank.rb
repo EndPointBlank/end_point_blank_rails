@@ -48,7 +48,7 @@ module EndPointBlank
   end
 
   def self.logger
-    Configuration.instance.logger || (@default_logger ||= ::Logger.new($stdout))
+    Configuration.instance.logger || (@default_logger ||= ::Logger.new($stdout, level: ::Logger::INFO))
   end
 
   def self.logger=(logger)

@@ -1,6 +1,7 @@
 #!/bin/ruby
 
 require 'excon'
+require "json"
 require_relative 'http'
 
 module EndPointBlank
@@ -23,7 +24,8 @@ module EndPointBlank
             **EndPointBlank::Commands::Http::TIMEOUT_OPTIONS
           )
           EndPointBlank.logger.info "Authentication response: #{response.status} - #{response.body}"
-          response.body.is_a?(String) ? JSON.parse(response.body).symbolize_keys : response.body.symbolize_keys
+          parsed_body = response.body.is_a?(String) ? JSON.parse(response.body) : response.body
+          parsed_body.transform_keys(&:to_sym)
         rescue => e
           EndPointBlank.logger.error "Error occurred during authentication: #{e.message}\n #{e.backtrace.join("\n")}"
           nil
