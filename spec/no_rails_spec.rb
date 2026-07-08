@@ -115,12 +115,10 @@ RSpec.describe "EndPointBlank core without ::Rails" do
         "PATH_INFO" => "/x",
         "SERVER_NAME" => "example.test",
         "SERVER_PORT" => "80",
-        "rack.input" => StringIO.new(""),
-        # RequestWriter#payload reads env_name via SessionConfiguration, which
-        # (independent of the ActionDispatch/Rack::Request swap under test
-        # here) expects a "puma.config" entry; unrelated to this task, so it
-        # is stubbed just enough to let payload building complete.
-        "puma.config" => double(options: { environment: "test" })
+        "rack.input" => StringIO.new("")
+        # No "puma.config" entry here: SessionConfiguration.env_name is
+        # framework-agnostic and nil-safe, so payload building must complete
+        # without one (this is the Sinatra/plain-Rack regression case).
       }
     end
 

@@ -11,7 +11,7 @@ module EndPointBlank
   class Configuration
     include Singleton
 
-    attr_writer :client_id, :client_secret, :base_url, :log_base_url, :app_name
+    attr_writer :client_id, :client_secret, :base_url, :log_base_url, :app_name, :env_name
 
     attr_accessor :environment, :worker_count, :log_mode,
                   :version_finder, :application_version, :token_ttl, :cache_ttl,
@@ -96,6 +96,12 @@ module EndPointBlank
       elsif defined?(::Rails)
         ::Rails.application.name.underscore
       end
+    end
+
+    # Returns the configured environment name, falling back to the
+    # ENDPOINTBLANK_ENV environment variable when not explicitly set.
+    def env_name
+      @env_name || ENV["ENDPOINTBLANK_ENV"]
     end
   end
 end

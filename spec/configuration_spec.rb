@@ -8,9 +8,10 @@ CONFIGURATION_SPEC_ENV_KEYS = %w[
   ENDPOINTBLANK_BASE_URL
   ENDPOINTBLANK_LOG_BASE_URL
   ENDPOINTBLANK_APP_NAME
+  ENDPOINTBLANK_ENV
 ].freeze
 
-CONFIGURATION_SPEC_IVARS = %i[@client_id @client_secret @base_url @log_base_url @app_name].freeze
+CONFIGURATION_SPEC_IVARS = %i[@client_id @client_secret @base_url @log_base_url @app_name @env_name].freeze
 
 # rubocop:disable Metrics/BlockLength
 RSpec.describe EndPointBlank::Configuration do
@@ -129,6 +130,25 @@ RSpec.describe EndPointBlank::Configuration do
 
       expect { configuration.app_name }.not_to raise_error
       expect(configuration.app_name).to be_nil
+    end
+  end
+
+  describe "#env_name" do
+    it "falls back to ENDPOINTBLANK_ENV when unset" do
+      ENV["ENDPOINTBLANK_ENV"] = "env-name-from-env"
+
+      expect(configuration.env_name).to eq("env-name-from-env")
+    end
+
+    it "prefers an explicitly configured value over the env var" do
+      ENV["ENDPOINTBLANK_ENV"] = "env-name-from-env"
+      EndPointBlank.configure { |c| c.env_name = "explicit-env-name" }
+
+      expect(configuration.env_name).to eq("explicit-env-name")
+    end
+
+    it "returns nil when neither is set" do
+      expect(configuration.env_name).to be_nil
     end
   end
 end
