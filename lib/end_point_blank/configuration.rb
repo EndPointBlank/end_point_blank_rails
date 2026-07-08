@@ -13,7 +13,7 @@ module EndPointBlank
 
     attr_writer :client_id, :client_secret, :base_url, :log_base_url, :app_name, :env_name
 
-    attr_accessor :environment, :worker_count, :log_mode,
+    attr_accessor :worker_count, :log_mode,
                   :version_finder, :application_version, :token_ttl, :cache_ttl,
                   :masking_rules, :mask_hook, :logger
 

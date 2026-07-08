@@ -1,4 +1,6 @@
-require 'singleton'
+# frozen_string_literal: true
+
+require "singleton"
 
 module EndPointBlank
   module Writers
@@ -14,6 +16,9 @@ module EndPointBlank
     module DelayedWriter
       MAX_QUEUE_SIZE = 1000
       WARN_THROTTLE_SECONDS = 30
+      # Fallback thread count used when Configuration#worker_count is unset,
+      # preserving the previously-hardcoded pool size.
+      DEFAULT_WORKER_COUNT = 2
 
       def direct_writer
         @direct_writer ||= DirectWriter.new(url)
@@ -23,28 +28,32 @@ module EndPointBlank
         @queue ||= Queue.new
       end
 
+      def worker_count
+        EndPointBlank::Configuration.instance.worker_count || DEFAULT_WORKER_COUNT
+      end
+
       def start_threads
         @threads = []
 
-        2.times do
+        worker_count.times do
           @threads << Thread.new do
             loop do
               payload = queue.pop
               payloads = [payload]
-              while (payload = pop_additional) do
+              while (payload = pop_additional)
                 payloads << payload
               end
 
               payloads.compact!
-              while payloads.any? do
+              while payloads.any?
                 list = payloads[0..5]
                 response = direct_writer.write(list)
                 if response.status < 299
                   on_success(response) if respond_to?(:on_success)
-                else
-                  on_failure(response) if respond_to?(:on_failure)
+                elsif respond_to?(:on_failure)
+                  on_failure(response)
                 end
-                payloads = payloads - list
+                payloads -= list
               end
             end
           end
