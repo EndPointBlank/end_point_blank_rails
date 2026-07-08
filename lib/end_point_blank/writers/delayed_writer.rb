@@ -62,15 +62,11 @@ module EndPointBlank
         items.each { |payload| enqueue_one(payload) }
       end
 
-      # Logs a drop warning. Overridable/stubbable in tests; defaults to the
-      # Rails logger when available (this lib is fire-and-forget and must
-      # never raise), falling back to Kernel#warn otherwise.
+      # Logs a drop warning. Overridable/stubbable in tests; routed through
+      # the pluggable EndPointBlank.logger seam (this lib is fire-and-forget
+      # and must never raise).
       def log_warning(message)
-        if defined?(::Rails) && ::Rails.respond_to?(:logger) && ::Rails.logger
-          ::Rails.logger.warn(message)
-        else
-          warn message
-        end
+        EndPointBlank.logger.warn(message)
       end
 
       private

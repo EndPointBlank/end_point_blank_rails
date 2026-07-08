@@ -23,7 +23,7 @@ module EndPointBlank
       end
 
       def write(data)
-        ::Rails.logger.info "[EndPointBlank] Sending application update: " \
+        EndPointBlank.logger.info "[EndPointBlank] Sending application update: " \
           "application=#{data[:application]} environment=#{data[:environment]} " \
           "app_version=#{data[:app_version]}"
 
@@ -33,9 +33,9 @@ module EndPointBlank
           **EndPointBlank::Commands::Http::TIMEOUT_OPTIONS
         )
         if response.status > 299
-          ::Rails.logger.error "Failed to update endpoint: #{response.status} - #{response.body}"
+          EndPointBlank.logger.error "Failed to update endpoint: #{response.status} - #{response.body}"
         else
-          ::Rails.logger.info "Endpoint updated successfully: #{response.status}"
+          EndPointBlank.logger.info "Endpoint updated successfully: #{response.status}"
         end
       rescue Excon::Error => e
         # Was `rescue Excon::Error::Socket, Excon::Error::Connection` -
@@ -44,7 +44,7 @@ module EndPointBlank
         # timeout (Excon::Error::Timeout) would have crashed the caller.
         # Rescuing Excon::Error catches every transport failure, including
         # timeouts, without letting this fire-and-forget call ever raise.
-        ::Rails.logger.warn "EndPointBlank: could not reach intake to update endpoints (#{e.message})"
+        EndPointBlank.logger.warn "EndPointBlank: could not reach intake to update endpoints (#{e.message})"
       end
 
       def self.update

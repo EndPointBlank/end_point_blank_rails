@@ -36,7 +36,7 @@ module EndPointBlank
           @tokens[hostname] = payload
           payload[:token]
         else
-          ::Rails.logger.error "Failed to generate access token for #{hostname}: #{payload&.fetch('error')}"
+          EndPointBlank.logger.error "Failed to generate access token for #{hostname}: #{payload&.fetch('error')}"
           nil
         end
       end

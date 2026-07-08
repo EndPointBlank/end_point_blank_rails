@@ -22,10 +22,10 @@ module EndPointBlank
             body: body.to_json,
             **EndPointBlank::Commands::Http::TIMEOUT_OPTIONS
           )
-          ::Rails.logger.info "Authentication response: #{response.status} - #{response.body}"
+          EndPointBlank.logger.info "Authentication response: #{response.status} - #{response.body}"
           response.body.is_a?(String) ? JSON.parse(response.body).symbolize_keys : response.body.symbolize_keys
         rescue => e
-          ::Rails.logger.error "Error occurred during authentication: #{e.message}\n #{e.backtrace.join("\n")}"
+          EndPointBlank.logger.error "Error occurred during authentication: #{e.message}\n #{e.backtrace.join("\n")}"
           nil
         end
       end

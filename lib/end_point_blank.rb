@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "logger"
+
 require_relative "end_point_blank/access_tokens"
 require_relative "end_point_blank/authorization"
 require_relative "end_point_blank/version"
@@ -42,5 +44,13 @@ module EndPointBlank
   # Your code goes here...
   def self.configure(&block)
     yield Configuration.instance
+  end
+
+  def self.logger
+    Configuration.instance.logger || (@default_logger ||= ::Logger.new($stdout))
+  end
+
+  def self.logger=(logger)
+    Configuration.instance.logger = logger
   end
 end

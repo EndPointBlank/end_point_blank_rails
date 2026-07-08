@@ -35,7 +35,8 @@ module EndPointBlank
             sleep RETRY_DELAY
             retry
           end
-          ::Rails.logger.error "[EndPointBlank] HTTP POST to #{url} failed after #{MAX_ATTEMPTS} attempts: #{e.message}"
+          EndPointBlank.logger.error \
+            "[EndPointBlank] HTTP POST to #{url} failed after #{MAX_ATTEMPTS} attempts: #{e.message}"
           nil
         end
       end

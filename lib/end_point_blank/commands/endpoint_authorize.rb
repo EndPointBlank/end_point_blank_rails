@@ -45,11 +45,11 @@ module EndPointBlank
           end
 
           return nil if response.nil?
-          ::Rails.logger.info "Authentication response: #{response.status} - #{response.body}"
+          EndPointBlank.logger.info "Authentication response: #{response.status} - #{response.body}"
           if response.status == 201
             cache.store(cache_key, true)
           elsif response.status > 299
-            ::Rails.logger.error "Failed to authorize endpoint: #{response.status} - #{response.body}"
+            EndPointBlank.logger.error "Failed to authorize endpoint: #{response.status} - #{response.body}"
           end
           response
         end
