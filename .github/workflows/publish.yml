@@ -1,0 +1,29 @@
+name: Publish
+
+# Publishes the gem to RubyGems when a GitHub Release is published.
+# Requires repo secret RUBYGEMS_API_KEY (Settings → Secrets and variables → Actions).
+# Skips gracefully (no failure) until that secret is configured.
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.4.2'
+      - name: Build & publish gem
+        env:
+          GEM_HOST_API_KEY: ${{ secrets.RUBYGEMS_API_KEY }}
+        run: |
+          if [ -z "$GEM_HOST_API_KEY" ]; then
+            echo "::warning::RUBYGEMS_API_KEY not configured — skipping publish. Add it in repo Settings → Secrets to enable."
+            exit 0
+          fi
+          gem build *.gemspec
+          gem push ./*.gem
