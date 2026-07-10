@@ -36,6 +36,7 @@ module EndPointBlank
             body: truncate(normalize_body(body)),
             sent_at: Time.now.utc.iso8601(3),
             route: route,
+            method: request&.request_method,
             data: data,
             source_application_environment_id: source_application_environment_id
         }
