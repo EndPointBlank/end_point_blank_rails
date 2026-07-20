@@ -3,6 +3,8 @@ module EndPointBlank
     module Headers
       def self.extract
         env = ::EndPointBlank::Rack::EnvStore.get
+        return {} if env.nil?
+
         env.select { |k,v| k.start_with? 'HTTP_'}.
           transform_keys { |k| k.sub(/^HTTP_/, '').split('_').map(&:capitalize).join('-') }
       end
