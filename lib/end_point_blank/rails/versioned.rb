@@ -4,15 +4,20 @@ module EndPointBlank
       extend ActiveSupport::Concern
 
       class_methods do
-        # Define versioning for specific actions
+        # Record which versions specific actions serve.
+        #
+        # Lifecycle state (Current, Deprecated, ...) is NOT declared here. It is
+        # managed in the EndPointBlank portal, where changing it does not require
+        # shipping code. This reports which versions exist, not what they mean.
+        #
         # @param versions [Array<String>] List of version strings (e.g., ["v1", "v2"])
         # @param options [Hash] Options hash with :only or :except keys
         # @option options [Array<Symbol>] :only Actions to include in versioning
         # @option options [Array<Symbol>] :except Actions to exclude from versioning
         #
         # Example:
-        #   version ["v1", "v2"], only: [:index], state: "Current"
-        #   version ["v3"], except: [:destroy], state: "Deprecated"
+        #   version ["v1", "v2"], only: [:index]
+        #   version ["v3"], except: [:destroy]
         def version(values, options = {})
           versions = Array(values)
           @versioning_config ||= {}
@@ -20,23 +25,16 @@ module EndPointBlank
           actions = determine_actions(options)
 
           actions.each do |action|
-            @versioning_config[action] ||= {}
-            state = options[:state] || "__default__"
-            @versioning_config[action][state] ||= []
-            @versioning_config[action][state] = (@versioning_config[action][state] + versions).uniq
+            # uniq preserves declaration order, so the manifest stays stable
+            # between deploys instead of churning.
+            @versioning_config[action] = ((@versioning_config[action] || []) + versions).uniq
           end
         end
 
-        # Returns the versioning configuration hash
-        # @return [Hash] Hash mapping action names to their version arrays
-        #
-        # Example return value:
-        #   {
-        #     index: ["v1", "v2"],
-        #     show: ["v1"]
-        #   }
+        # Versions the given action serves.
+        # @return [Array<String>] e.g. ["v1", "v2"]; empty when none declared.
         def versions(action)
-          @versioning_config&.fetch(action, {}) || {}
+          @versioning_config&.fetch(action, []) || []
         end
 
         private
