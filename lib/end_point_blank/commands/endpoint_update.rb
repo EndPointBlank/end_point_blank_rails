@@ -110,7 +110,7 @@ module EndPointBlank
             nil
           else
             controller_class = "#{route.defaults[:controller].camelize}Controller".constantize
-            versions = controller_class.respond_to?(:versions) ? controller_class.versions(route.defaults[:action].to_sym) : {}
+            versions = controller_class.respond_to?(:versions) ? controller_class.versions(route.defaults[:action].to_sym) : []
             {
               path: route.path.spec.to_s.gsub(/\([^)]*\)/, ''),
               http_method: route.verb,
