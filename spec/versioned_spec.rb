@@ -85,6 +85,15 @@ RSpec.describe EndPointBlank::Rails::Versioned do
     expect(klass.versions(:destroy)).to eq([])
   end
 
+  it 'applies to every action the controller defines when no options are given' do
+    klass = controller_class
+    klass.version %w[v1]
+
+    expect(klass.versions(:index)).to eq(%w[v1])
+    expect(klass.versions(:show)).to eq(%w[v1])
+    expect(klass.versions(:destroy)).to eq(%w[v1])
+  end
+
   it 'applies to every action except those named by :except' do
     klass = controller_class
     klass.version %w[v1], except: [:destroy]

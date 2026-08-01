@@ -245,5 +245,56 @@ RSpec.describe EndPointBlank::Masking do
       out = described_class.apply(payload, :request, [rule(target: "request_body", path: "$.m.*", replacement: "Z")], nil)
       expect(JSON.parse(out[:request])).to eq("m" => { "a" => "Z", "b" => "Z" })
     end
+
+    it "parses double-quoted bracketed child names" do
+      payload = { request: '{"a.b":{"x":1}}' }
+      out = described_class.apply(payload, :request, [rule(target: "request_body", path: '$["a.b"].x', replacement: "Z")], nil)
+      expect(JSON.parse(out[:request])).to eq("a.b" => { "x" => "Z" })
+    end
+
+    it "recursive descent reaches into arrays" do
+      payload = { request: '{"users":[{"password":"p1"},{"password":"p2"}]}' }
+      out = described_class.apply(payload, :request, [rule(target: "request_body", path: "$..password", replacement: "***")], nil)
+      expect(JSON.parse(out[:request])).to eq("users" => [{ "password" => "***" }, { "password" => "***" }])
+    end
+
+    it "wildcard over a scalar is a no-op" do
+      payload = { request: '{"name":"alice"}' }
+      out = described_class.apply(payload, :request, [rule(target: "request_body", path: "$.name.*", replacement: "Z")], nil)
+      expect(JSON.parse(out[:request])).to eq("name" => "alice")
+    end
+  end
+
+  describe "values that cannot be masked" do
+    # A response can legitimately have no body, and a rule aimed at
+    # response_body still runs. Masking must not turn that into a "..." string
+    # that reads as a redacted body the caller never sent.
+    it "leaves a response with no body alone" do
+      payload = { body: nil }
+      out = described_class.apply(payload, :response, [rule(target: "response_body", path: "$.email")], nil)
+      expect(out[:body]).to be_nil
+    end
+
+    it "leaves a non-string, non-hash value alone" do
+      payload = { body: 42 }
+      out = described_class.apply(payload, :response, [rule(target: "response_body", regex: '\d+', replacement: "X")], nil)
+      expect(out[:body]).to eq(42)
+    end
+
+    # Rules come from the portal, where a provider types the regex by hand. An
+    # unparseable one must skip that rule, not blow up the outgoing payload.
+    it "skips a rule whose regex does not compile" do
+      payload = { request: '{"v":"secret"}' }
+      out = described_class.apply(payload, :request, [rule(target: "request_body", regex: "[unclosed", replacement: "X")], nil)
+      expect(JSON.parse(out[:request])).to eq("v" => "secret")
+    end
+  end
+
+  describe "regex over mixed containers" do
+    it "substitutes inside arrays and leaves non-string elements alone" do
+      payload = { request: '{"list":["a1","b2",3,null]}' }
+      out = described_class.apply(payload, :request, [rule(target: "request_body", regex: '\d', replacement: "#")], nil)
+      expect(JSON.parse(out[:request])).to eq("list" => ["a#", "b#", 3, nil])
+    end
   end
 end

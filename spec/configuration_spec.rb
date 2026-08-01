@@ -131,6 +131,20 @@ RSpec.describe EndPointBlank::Configuration do
       expect { configuration.app_name }.not_to raise_error
       expect(configuration.app_name).to be_nil
     end
+
+    it "derives a name from the Rails application when nothing else is set" do
+      with_fake_rails(application: double("application", name: "MyApp::Application")) do
+        expect(configuration.app_name).to include("my_app")
+      end
+    end
+
+    it "still prefers the env var over the Rails application name" do
+      ENV["ENDPOINTBLANK_APP_NAME"] = "env-app-name"
+
+      with_fake_rails(application: double("application", name: "MyApp::Application")) do
+        expect(configuration.app_name).to eq("env-app-name")
+      end
+    end
   end
 
   describe "#env_name" do

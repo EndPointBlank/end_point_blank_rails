@@ -75,6 +75,15 @@ RSpec.describe EndPointBlank::DeprecationHeaders do
       headers = described_class.build(deprecated_at: "2026-01-01T00:00:00Z")
       expect(headers["Deprecation"]).to eq("@1767225600")
     end
+
+    it "accepts a Time as readily as an ISO 8601 string" do
+      headers = described_class.build("sunset_at" => Time.at(1_767_225_600))
+      expect(headers["Sunset"]).to eq("Thu, 01 Jan 2026 00:00:00 GMT")
+    end
+
+    it "ignores an empty string" do
+      expect(described_class.build("deprecated_at" => "")).to eq({})
+    end
   end
 
   describe "never raising into the response path" do
