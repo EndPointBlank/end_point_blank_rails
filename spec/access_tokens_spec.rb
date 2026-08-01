@@ -65,3 +65,161 @@ RSpec.describe EndPointBlank::AccessTokens do
   end
 end
 # rubocop:enable Metrics/BlockLength
+
+# The token cache in front of the intake's token endpoint. Everything here
+# drives the real singleton and stubs only Excon, the network boundary that
+# EndPointBlank::Commands::GenerateAccessToken posts through.
+#
+# rubocop:disable Metrics/BlockLength
+RSpec.describe "EndPointBlank::AccessTokens against the token endpoint" do
+  let(:instance) { EndPointBlank::AccessTokens.instance }
+  let(:configuration) { EndPointBlank::Configuration.instance }
+  let(:logger) { double("logger", info: nil, error: nil, warn: nil) }
+  let(:hostname) { "tokens.example.test" }
+  let(:issued) { %w[tok-1 tok-2 tok-3] }
+  let(:token_lifetime) { 3600 }
+
+  around do |example|
+    original_ttl = configuration.token_ttl
+
+    example.run
+
+    configuration.token_ttl = original_ttl
+    instance.clear(nil)
+  end
+
+  before do
+    allow(EndPointBlank).to receive(:logger).and_return(logger)
+    configuration.client_id = "cid"
+    configuration.client_secret = "csecret"
+    instance.clear(nil)
+
+    allow(Excon).to receive(:post) do
+      double(
+        "response",
+        status: 200,
+        body: JSON.generate(token: issued.shift, expired_at: (Time.now + token_lifetime).utc.iso8601)
+      )
+    end
+  end
+
+  it "issues a token for a hostname" do
+    expect(instance.token(hostname)).to eq("tok-1")
+  end
+
+  it "reuses a live token instead of asking for a new one on every request" do
+    instance.token(hostname)
+    instance.token(hostname)
+
+    expect(Excon).to have_received(:post).once
+  end
+
+  # Hostnames arrive from the Host header, whose casing is the caller's choice.
+  # Treating them as distinct would mean a fresh token exchange per casing.
+  it "treats a hostname as case-insensitive" do
+    instance.token("Tokens.Example.Test")
+    instance.token("tokens.example.test")
+
+    expect(Excon).to have_received(:post).once
+  end
+
+  it "keeps a separate token per hostname" do
+    expect(instance.token("one.example.test")).to eq("tok-1")
+    expect(instance.token("two.example.test")).to eq("tok-2")
+  end
+
+  it "reports a live token as present, and an unknown hostname as absent" do
+    instance.token(hostname)
+
+    expect(instance.exists?(hostname)).to be(true)
+    expect(instance.exists?("never-seen.example.test")).to be(false)
+  end
+
+  it "treats a token that is about to expire as absent" do
+    # Callers use exists? to decide whether they can proceed without a round
+    # trip; a token with seconds left on it would expire mid-flight.
+    allow(Excon).to receive(:post).and_return(
+      double("response", status: 200, body: JSON.generate(token: "expiring", expired_at: (Time.now + 5).utc.iso8601))
+    )
+    instance.token(hostname)
+
+    expect(instance.exists?(hostname)).to be(false)
+  end
+
+  it "exchanges again after the token is removed" do
+    instance.token(hostname)
+    instance.remove(hostname)
+
+    expect(instance.token(hostname)).to eq("tok-2")
+  end
+
+  it "exchanges again for every hostname after a clear" do
+    instance.token("one.example.test")
+    instance.token("two.example.test")
+
+    instance.clear(nil)
+
+    expect(instance.token("one.example.test")).to eq("tok-3")
+  end
+
+  it "passes the configured token lifetime to the intake" do
+    configuration.token_ttl = 900
+
+    instance.token(hostname)
+
+    expect(Excon).to have_received(:post).with(
+      configuration.access_token_url,
+      hash_including(body: include('"token_ttl":900'))
+    )
+  end
+
+  it "omits the token lifetime when none is configured" do
+    configuration.token_ttl = nil
+
+    instance.token(hostname)
+
+    expect(Excon).to have_received(:post).with(
+      configuration.access_token_url,
+      hash_including(body: '{"hostname":"tokens.example.test"}')
+    )
+  end
+
+  describe "when the intake will not issue a token" do
+    # Regression: this branch used Hash#fetch with a string key against a
+    # symbol-keyed hash, so the code path that exists to fail gracefully
+    # raised KeyError instead -- a 500 produced by the logging of an error.
+    it "returns nil and logs the reason the intake gave" do
+      allow(Excon).to receive(:post).and_return(
+        double("response", status: 403, body: JSON.generate(error: "client credentials revoked"))
+      )
+
+      result = nil
+      expect { result = instance.token(hostname) }.not_to raise_error
+
+      expect(result).to be_nil
+      expect(logger).to have_received(:error).with(/client credentials revoked/)
+    end
+
+    it "returns nil and says so when the intake could not be reached at all" do
+      allow(Excon).to receive(:post).and_raise(Excon::Error::Timeout.new("timed out"))
+
+      result = nil
+      expect { result = instance.token(hostname) }.not_to raise_error
+
+      expect(result).to be_nil
+      expect(logger).to have_received(:error).with(/no response/)
+    end
+
+    it "does not cache the failure, so the next request tries again" do
+      allow(Excon).to receive(:post).and_return(double("response", status: 500, body: "{}"))
+      instance.token(hostname)
+
+      allow(Excon).to receive(:post).and_return(
+        double("response", status: 200, body: JSON.generate(token: "recovered", expired_at: (Time.now + 3600).utc.iso8601))
+      )
+
+      expect(instance.token(hostname)).to eq("recovered")
+    end
+  end
+end
+# rubocop:enable Metrics/BlockLength
