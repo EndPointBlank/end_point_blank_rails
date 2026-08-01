@@ -20,7 +20,14 @@ module EndPointBlank
           method      = request.request_method
           path        = request.route_uri_pattern.to_s.gsub(/\([^)]*\)/, '')
           app_name    = Configuration.instance.app_name
-          cache_key   = "epb_auth:#{client_auth}:#{path}:#{method}:#{app_name}"
+          # The version is part of the key because authorization is decided per
+          # endpoint version, and so is the deprecation carried back with it.
+          # Without it, two callers on different versions of the same route share
+          # one entry: whichever authorizes first decides both, so a client on a
+          # deprecated version can get no warning, or one on a current version
+          # can be told it is retiring.
+          version     = VersionFinder.new.find(request)
+          cache_key   = "epb_auth:#{client_auth}:#{path}:#{method}:#{app_name}:#{version}"
 
           cache = AuthenticationCache.instance
           # The cached value is the authorize response body, not a truthy
@@ -44,7 +51,7 @@ module EndPointBlank
             client_auth: client_auth,
             target_hostname: hostname,
             application: app_name,
-            endpoint_version: VersionFinder.new.find(request),
+            endpoint_version: version,
             source_ip: request.remote_ip,
             uuid: request.uuid
           }
