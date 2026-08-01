@@ -1,0 +1,5 @@
+#!/bin/sh
+
+gem build end_point_blank.gemspec
+
+gem push end_point_blank-*.gem

@@ -35,7 +35,19 @@ module EndPointBlank
           @tokens[hostname] = payload
           payload[:token]
         else
-          EndPointBlank.logger.error "Failed to generate access token for #{hostname}: #{payload&.fetch('error')}"
+          # Hash#fetch raises on a missing key, so the old `payload&.fetch('error')`
+          # turned a handled token failure into a KeyError — a 500 raised by the
+          # logging of an error, on the path that exists to fail gracefully.
+          # It also read a string key while the rest of this method uses symbols,
+          # which made the miss near-certain.
+          reason =
+            if payload.is_a?(Hash)
+              payload[:error] || payload["error"] || "no token in response"
+            else
+              "no response"
+            end
+
+          EndPointBlank.logger.error "Failed to generate access token for #{hostname}: #{reason}"
           nil
         end
       end

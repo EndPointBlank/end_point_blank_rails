@@ -17,6 +17,9 @@ module EndPointBlank
         result_json = JSON.parse(result.body)
         app_env_id = result_json['data'][0]['source_application_environment_id']
         ::EndPointBlank::Rack::EnvStore.set_source_application_environment_id(app_env_id)
+        # Present only when the called version is deprecated; the middleware
+        # turns it into Deprecation / Sunset headers on the way out.
+        ::EndPointBlank::Rack::EnvStore.set_deprecation(result_json['deprecation'])
       end
 
       private

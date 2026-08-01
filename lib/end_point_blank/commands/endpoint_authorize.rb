@@ -1,5 +1,6 @@
 #!/bin/ruby
 
+require 'json'
 require_relative 'http'
 require_relative 'authentication_cache'
 
@@ -19,10 +20,28 @@ module EndPointBlank
           method      = request.request_method
           path        = request.route_uri_pattern.to_s.gsub(/\([^)]*\)/, '')
           app_name    = Configuration.instance.app_name
-          cache_key   = "epb_auth:#{client_auth}:#{path}:#{method}:#{app_name}"
+          # The version is part of the key because authorization is decided per
+          # endpoint version, and so is the deprecation carried back with it.
+          # Without it, two callers on different versions of the same route share
+          # one entry: whichever authorizes first decides both, so a client on a
+          # deprecated version can get no warning, or one on a current version
+          # can be told it is retiring.
+          version     = VersionFinder.new.find(request)
+          cache_key   = "epb_auth:#{client_auth}:#{path}:#{method}:#{app_name}:#{version}"
 
           cache = AuthenticationCache.instance
-          return CachedResponse.new(201, '') if cache.exists?(cache_key)
+          # The cached value is the authorize response body, not a truthy
+          # marker.
+          #
+          # It has to be, for two reasons. Callers parse the body — a cache hit
+          # returning '' made JSON.parse raise, so a cached authorization became
+          # a 500 rather than a fast success. And the body is where the
+          # deprecation block lives; without it the Deprecation and Sunset
+          # headers would appear only on cache misses, which reads as a flaky
+          # feature rather than a missing one.
+          if (cached = cache.retrieve(cache_key))
+            return CachedResponse.new(201, cached)
+          end
 
           hostname = request.host
           auth = Authorization.header(hostname)
@@ -32,7 +51,7 @@ module EndPointBlank
             client_auth: client_auth,
             target_hostname: hostname,
             application: app_name,
-            endpoint_version: VersionFinder.new.find(request),
+            endpoint_version: version,
             source_ip: request.remote_ip,
             uuid: request.uuid
           }
@@ -47,7 +66,7 @@ module EndPointBlank
           return nil if response.nil?
           EndPointBlank.logger.info "Authentication response: #{response.status} - #{response.body}"
           if response.status == 201
-            cache.store(cache_key, true)
+            cache.store(cache_key, response.body)
           elsif response.status > 299
             EndPointBlank.logger.error "Failed to authorize endpoint: #{response.status} - #{response.body}"
           end
