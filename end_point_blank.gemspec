@@ -34,8 +34,13 @@ Gem::Specification.new do |spec|
 
   # Uncomment to register a new dependency of your gem
   spec.add_dependency "excon", "~> 1.0"
-  spec.add_dependency "rack"
-  spec.add_dependency "rexml"
+  # rack and rexml carried no floor at all, which let a host application resolve
+  # them to versions with known advisories. These are the lowest releases clear
+  # of every advisory published against each gem, not the newest available — a
+  # library should state the oldest version it will vouch for, not force the
+  # host to the bleeding edge.
+  spec.add_dependency "rack", ">= 3.2.6"
+  spec.add_dependency "rexml", ">= 3.3.9"
   # Base64 was removed from Ruby's default gems as of 3.4; Authorization
   # uses it for the Basic-auth header, so declare it explicitly.
   spec.add_dependency "base64"
