@@ -1,5 +1,6 @@
 #!/bin/ruby
 
+require 'json'
 require_relative 'http'
 require_relative 'authentication_cache'
 
@@ -22,7 +23,18 @@ module EndPointBlank
           cache_key   = "epb_auth:#{client_auth}:#{path}:#{method}:#{app_name}"
 
           cache = AuthenticationCache.instance
-          return CachedResponse.new(201, '') if cache.exists?(cache_key)
+          # The cached value is the authorize response body, not a truthy
+          # marker.
+          #
+          # It has to be, for two reasons. Callers parse the body — a cache hit
+          # returning '' made JSON.parse raise, so a cached authorization became
+          # a 500 rather than a fast success. And the body is where the
+          # deprecation block lives; without it the Deprecation and Sunset
+          # headers would appear only on cache misses, which reads as a flaky
+          # feature rather than a missing one.
+          if (cached = cache.retrieve(cache_key))
+            return CachedResponse.new(201, cached)
+          end
 
           hostname = request.host
           auth = Authorization.header(hostname)
@@ -47,7 +59,7 @@ module EndPointBlank
           return nil if response.nil?
           EndPointBlank.logger.info "Authentication response: #{response.status} - #{response.body}"
           if response.status == 201
-            cache.store(cache_key, true)
+            cache.store(cache_key, response.body)
           elsif response.status > 299
             EndPointBlank.logger.error "Failed to authorize endpoint: #{response.status} - #{response.body}"
           end

@@ -19,6 +19,14 @@ module EndPointBlank
 
           status, headers, body = @app.call(env)
 
+          # RFC 9745 / RFC 8594. The provider writes no code for this: the
+          # portal decided the version is deprecated, authorize relayed the
+          # dates, and this attaches them to the response their consumer
+          # already receives.
+          ::EndPointBlank::DeprecationHeaders
+            .build(::EndPointBlank::Rack::EnvStore.deprecation)
+            .each { |name, value| headers[name] = value }
+
           [status, headers, body]
         rescue ::EndPointBlank::UnauthorizedError => e
           # We don't want to log unauthorized errors as they are expected to happen
