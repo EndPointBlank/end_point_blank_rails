@@ -4,8 +4,8 @@ PATH
     end_point_blank (0.3.0)
       base64
       excon (~> 1.0)
-      rack
-      rexml
+      rack (>= 3.2.6)
+      rexml (>= 3.3.9)
 
 GEM
   remote: https://rubygems.org/
