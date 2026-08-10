@@ -43,16 +43,43 @@ module EndPointBlank
     def from_rack_env(env, trust_proxy_headers: true)
       return {} unless env.is_a?(Hash)
 
-      forwarded_proto = trust_proxy_headers ? last_hop(env["HTTP_X_FORWARDED_PROTO"]) : nil
-      forwarded_host = trust_proxy_headers ? last_hop(env["HTTP_X_FORWARDED_HOST"]) : nil
-      forwarded_port = trust_proxy_headers ? last_hop(env["HTTP_X_FORWARDED_PORT"]) : nil
-      proxied = !(forwarded_proto.nil? && forwarded_host.nil? && forwarded_port.nil?)
+      forwarded_scheme = trust_proxy_headers ? clean_scheme(last_hop(env["HTTP_X_FORWARDED_PROTO"])) : nil
+      forwarded_host_part, forwarded_host_authority_port =
+        trust_proxy_headers ? split_authority(last_hop(env["HTTP_X_FORWARDED_HOST"])) : [nil, nil]
+      forwarded_host = clean_host(forwarded_host_part)
+      forwarded_port = trust_proxy_headers ? parse_port(last_hop(env["HTTP_X_FORWARDED_PORT"])) : nil
 
-      host_part, authority_port = split_authority(forwarded_host || env["HTTP_HOST"] || env["SERVER_NAME"])
+      # Evidence is judged AFTER validation, not on raw header presence: a
+      # malformed header (e.g. "X-Forwarded-Port: not-a-port") parses to
+      # nothing and so must never count as proxy evidence, or an
+      # unauthenticated caller could blank an otherwise-valid field just by
+      # sending garbage.
+      #
+      # Only a forwarded scheme or port counts as evidence strong enough to
+      # distrust the raw connection. A forwarded Host alone does not: some
+      # proxies rewrite only the Host header and pass scheme/port through
+      # unchanged, so a valid X-Forwarded-Host by itself says nothing about
+      # whether the connection's own scheme/port belong to the proxy or the
+      # caller.
+      proxied = !forwarded_scheme.nil? || !forwarded_port.nil?
 
-      scheme = clean_scheme(forwarded_proto || (proxied ? nil : env["rack.url_scheme"]))
-      host = clean_host(host_part)
-      port = clean_port(forwarded_port || authority_port || (proxied ? nil : env["SERVER_PORT"]), scheme)
+      # A malformed X-Forwarded-Host (wrong shape, or too long -- see
+      # clean_host) gets the same treatment as a malformed proto or port: it
+      # is ignored entirely and falls back to the direct Host header, exactly
+      # as if the header were absent, rather than leaving host unresolved.
+      host_part, authority_port =
+        if forwarded_host
+          [forwarded_host_part, forwarded_host_authority_port]
+        else
+          split_authority(env["HTTP_HOST"] || env["SERVER_NAME"])
+        end
+
+      scheme = forwarded_scheme || (proxied ? nil : clean_scheme(env["rack.url_scheme"]))
+      host = forwarded_host || clean_host(host_part)
+      port_candidate = forwarded_port ||
+                       parse_port(authority_port) ||
+                       (proxied ? nil : parse_port(env["SERVER_PORT"]))
+      port = usable_port(port_candidate, scheme)
 
       resolved = {}
       resolved[:scheme] = scheme if scheme
@@ -103,21 +130,44 @@ module EndPointBlank
       scheme.match?(SCHEME) ? scheme : nil
     end
 
+    # DNS caps a hostname at 253 characters, and the receiving column is
+    # varchar(255). No web-server adapter validates the length of
+    # X-Forwarded-Host, so without this a caller could make the SDK report an
+    # arbitrarily long value; dropped, not truncated, because a truncated
+    # hostname is a plausible-looking WRONG one and the portal reads `host`
+    # verbatim to assemble a base URL.
     def clean_host(value)
       return nil unless value.is_a?(String)
 
       host = value.strip.downcase
-      return nil if host.empty?
+      return nil if host.empty? || host.bytesize > 253
 
       host.match?(HOSTNAME) || host.match?(IPV6) ? host : nil
     end
 
-    def clean_port(value, scheme)
+    # Numeric validation only -- 1..65535, nothing scheme-aware. Used both to
+    # decide whether a forwarded/authority port counts as a usable value and
+    # as a port candidate; default-port omission happens exactly once, in
+    # usable_port, against the FINAL resolved scheme, so it can never be
+    # skipped just because the scheme happened to resolve from a different
+    # source than the port did.
+    def parse_port(value)
       port = Integer(value.to_s.strip, 10, exception: false)
       return nil if port.nil? || port < 1 || port > 65_535
-      return nil if DEFAULT_PORTS[scheme] == port
 
       port
+    end
+
+    # A port is reported only when it can be classified against a resolved
+    # scheme. With no scheme, "default" is meaningless, so an unclassifiable
+    # port is withheld entirely rather than guessed at -- the same origin must
+    # never be reportable two ways depending on which headers happened to
+    # arrive.
+    def usable_port(candidate, scheme)
+      return nil if candidate.nil? || scheme.nil?
+      return nil if DEFAULT_PORTS[scheme] == candidate
+
+      candidate
     end
   end
 end
