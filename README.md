@@ -79,6 +79,7 @@ Every setting listed below can be set explicitly in that block, and most also fa
 | `worker_count` | — | `4` | Currently unused by the delayed writer (which always spins up 2 threads); reserved. |
 | `token_ttl` | — | `nil` | Optional TTL (seconds) requested when generating a `Bearer` access token. |
 | `cache_ttl` | — | `300` | TTL (seconds) for the authorization decision cache. |
+| `trust_proxy_headers` | — | `true` | Whether the per-request `scheme`/`host`/`port` report honors `X-Forwarded-Proto`/`-Host`/`-Port`. See [Reported base URL](#reported-base-url). |
 | `masking_rules` | — | `[]` | Ordered list of masking rule hashes — see [Data masking](#data-masking). |
 | `mask_hook` | — | `nil` | Optional `->(payload, record_type_string) { payload }` run after `masking_rules`. |
 | `version_finder` | — | `nil` | Optional `->(request) { "1" }` overriding `EndPointBlank::Commands::VersionFinder`'s default header/param/path detection. |
@@ -87,6 +88,35 @@ Every setting listed below can be set explicitly in that block, and most also fa
 Note: there is also a bare `environment` accessor on `Configuration`, but it is not read by any
 code path in this gem (the real per-request environment name is `env_name`, described above) — do
 not rely on it.
+
+### Reported base URL
+
+Every request payload carries the base URL the *caller* used, as three separate fields —
+`scheme`, `host` and `port`. A field that cannot be resolved is omitted rather than sent as
+null. EndPointBlank uses these to fill in an application environment's base URL for you,
+instead of asking someone to type it.
+
+By default the gem honors `X-Forwarded-Proto`, `X-Forwarded-Host` and `X-Forwarded-Port`,
+reading the **last** comma-separated hop. It does this on its own, without consulting Rails'
+or Rack's trusted-proxy configuration, so that all five EndPointBlank clients answer
+identically for the same request.
+
+**Turn this off if your application is reachable directly, with no proxy in front of it** —
+or if you would simply rather report nothing than report something a caller could influence:
+
+```ruby
+EndPointBlank.configure { |c| c.trust_proxy_headers = false }
+```
+
+With it off, the `X-Forwarded-*` headers are ignored entirely and `scheme`, `host` and `port`
+come from the connection and the `Host` header only.
+
+It defaults to `true` because the alternative is worse for almost everyone. Most production
+deployments sit behind an ALB, nginx, Caddy or an Ingress, and a client that ignored the
+forwarded headers there would not report *nothing* — it would confidently report an internal
+hostname on an internal port. `host` is caller-controlled either way (it has always come from
+the `Host` header), and none of these three values is ever used as an identity or
+authorization key, so the worst case is a wrong *suggestion* that an admin has to approve.
 
 ### `configure` block example
 
