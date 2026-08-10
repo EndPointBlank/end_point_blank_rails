@@ -15,7 +15,7 @@ module EndPointBlank
 
     attr_accessor :worker_count, :log_mode,
                   :version_finder, :application_version, :token_ttl, :cache_ttl,
-                  :masking_rules, :mask_hook, :logger
+                  :masking_rules, :mask_hook, :logger, :trust_proxy_headers
 
     def initialize
       @worker_count = 4
@@ -23,6 +23,7 @@ module EndPointBlank
       @cache_ttl = 300
       @masking_rules = []
       @mask_hook = nil
+      @trust_proxy_headers = true
     end
 
     # Returns the configured client id, falling back to the

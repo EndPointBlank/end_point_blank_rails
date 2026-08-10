@@ -173,3 +173,66 @@ RSpec.describe EndPointBlank::Writers::Shared do
     expect(EndPointBlank::Writers::RequestWriter.instance.env).to be_nil
   end
 end
+
+RSpec.describe EndPointBlank::Writers::RequestWriter do
+  after do
+    EndPointBlank::Rack::EnvStore.clear
+    EndPointBlank::Configuration.instance.trust_proxy_headers = true
+  end
+
+  # BaseUrl is covered on its own. This proves only that the writer actually
+  # calls it and lets the fields reach the payload -- a module nothing merges
+  # in is a module that ships nothing.
+  it "carries the resolved base URL fields" do
+    EndPointBlank::Rack::EnvStore.set(
+      ::Rack::MockRequest.env_for("/orders", "HTTP_HOST" => "API.Example.com:8443", "rack.url_scheme" => "https")
+    )
+
+    payload = described_class.instance.payload
+
+    expect(payload).to include(scheme: "https", host: "api.example.com", port: 8443, path: "/orders")
+  end
+
+  it "omits host entirely when it cannot be resolved, rather than sending null" do
+    EndPointBlank::Rack::EnvStore.set(
+      ::Rack::MockRequest.env_for("/orders", "HTTP_HOST" => "not a hostname")
+    )
+
+    expect(described_class.instance.payload).not_to have_key(:host)
+  end
+
+  # The pair below is the wiring check for the flag: same proxied request,
+  # both settings. If the writer ever stops passing the configured value
+  # through, the second example reports api.example.com and fails.
+  def proxied_env
+    ::Rack::MockRequest.env_for(
+      "/orders",
+      "rack.url_scheme" => "http",
+      "SERVER_PORT" => "8080",
+      "HTTP_HOST" => "internal.svc:8080",
+      "HTTP_X_FORWARDED_PROTO" => "https",
+      "HTTP_X_FORWARDED_HOST" => "api.example.com",
+      "HTTP_X_FORWARDED_PORT" => "443"
+    )
+  end
+
+  it "reports the forwarded values when proxy headers are trusted" do
+    EndPointBlank::Configuration.instance.trust_proxy_headers = true
+    EndPointBlank::Rack::EnvStore.set(proxied_env)
+
+    payload = described_class.instance.payload
+
+    expect(payload[:scheme]).to eq("https")
+    expect(payload[:host]).to eq("api.example.com")
+    expect(payload).not_to have_key(:port)
+  end
+
+  it "reports the connection and Host header when proxy headers are not trusted" do
+    EndPointBlank::Configuration.instance.trust_proxy_headers = false
+    EndPointBlank::Rack::EnvStore.set(proxied_env)
+
+    payload = described_class.instance.payload
+
+    expect(payload).to include(scheme: "http", host: "internal.svc", port: 8080)
+  end
+end

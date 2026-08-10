@@ -26,11 +26,10 @@ module EndPointBlank
         version = Commands::VersionFinder.new.find(request)
         headers = ::EndPointBlank::Rack::Headers.extract
 
-        payload = {
+        {
           app_name: EndPointBlank::Configuration.instance.app_name,
           env: SessionConfiguration.env_name,
           uuid: request_uuid(env),
-          host: request.host,
           status: request_status(request),
           headers: headers,
           path: request.path,
@@ -38,7 +37,12 @@ module EndPointBlank
           endpoint_version: version,
           request: request_body(request),
           sent_at: Time.now.utc.iso8601(3)
-        }
+        }.merge(
+          ::EndPointBlank::BaseUrl.from_rack_env(
+            env,
+            trust_proxy_headers: EndPointBlank::Configuration.instance.trust_proxy_headers
+          )
+        )
       end
 
       def write()
