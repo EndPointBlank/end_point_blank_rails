@@ -176,6 +176,14 @@ inbound `Authorization` header, app name, resolved endpoint version, and remote 
 `#{base_url}/api/authorize`, and caches a positive (201) result for `cache_ttl` seconds via
 `EndPointBlank::Commands::AuthenticationCache`.
 
+**Behavior change:** `target_hostname` on the authorize call, and the access-token cache key
+derived from it, now come from the `Host` header only. They previously came from
+`request.host`, which reads the last `X-Forwarded-Host` hop. If your app sits behind a proxy
+that **rewrites** `Host` (nginx's default; Caddy and most ALBs preserve it) and you registered
+the external hostname in the portal, either update the registered hostname to the internal one
+the app now reports, or configure the proxy to preserve `Host`. Deployments where `Host` and
+`X-Forwarded-Host` agree are unaffected.
+
 ### Error reporting
 
 Exceptions raised while `EndPointBlank::Middleware::Rack::ReportInteraction` is on the stack are

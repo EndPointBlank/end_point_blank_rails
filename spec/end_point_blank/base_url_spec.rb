@@ -2,6 +2,7 @@
 
 require "spec_helper"
 
+# rubocop:disable Metrics/BlockLength
 RSpec.describe EndPointBlank::BaseUrl do
   # Built by hand rather than through Rack::MockRequest, because the point of
   # this module is that it reads the env itself instead of trusting Rack's
@@ -180,4 +181,50 @@ RSpec.describe EndPointBlank::BaseUrl do
     expect(described_class.from_rack_env(env("HTTP_HOST" => "a" * 253))[:host]).to eq("a" * 253)
     expect(described_class.from_rack_env(env("HTTP_HOST" => "a" * 254))).not_to have_key(:host)
   end
+
+  describe ".hostname_from_rack_env" do
+    it "lowercases the host and strips the port" do
+      expect(described_class.hostname_from_rack_env(env)).to eq("api.example.com")
+    end
+
+    it "keeps an IPv6 literal whole and bracketed" do
+      resolved = described_class.hostname_from_rack_env(env("HTTP_HOST" => "[2001:DB8::1]:8443"))
+
+      expect(resolved).to eq("[2001:db8::1]")
+    end
+
+    it "ignores X-Forwarded-Host even though from_rack_env honors it" do
+      # target_hostname is the portal's application-environment lookup key. A
+      # value matching no registered row is a hard 422, not a cache miss.
+      proxied = env("HTTP_HOST" => "internal.svc", "HTTP_X_FORWARDED_HOST" => "api.example.com")
+
+      expect(described_class.hostname_from_rack_env(proxied)).to eq("internal.svc")
+      expect(described_class.from_rack_env(proxied)[:host]).to eq("api.example.com")
+    end
+
+    it "falls back to SERVER_NAME when there is no Host header" do
+      resolved = described_class.hostname_from_rack_env(env("HTTP_HOST" => nil))
+
+      expect(resolved).to eq("api.example.com")
+    end
+
+    it "is nil for a host that is not shaped like a hostname" do
+      resolved = described_class.hostname_from_rack_env(env("HTTP_HOST" => "api.example.com/../evil"))
+
+      expect(resolved).to be_nil
+    end
+
+    it "is nil for a host longer than DNS allows" do
+      resolved = described_class.hostname_from_rack_env(
+        env("HTTP_HOST" => "#{"a" * 250}.example.com", "SERVER_NAME" => nil)
+      )
+
+      expect(resolved).to be_nil
+    end
+
+    it "is nil when handed something that is not a Rack env" do
+      expect(described_class.hostname_from_rack_env(nil)).to be_nil
+    end
+  end
 end
+# rubocop:enable Metrics/BlockLength

@@ -43,7 +43,10 @@ module EndPointBlank
             return CachedResponse.new(201, cached)
           end
 
-          hostname = request.host
+          # Host header only, never the forwarded chain -- see
+          # BaseUrl.hostname_from_rack_env. request.host would read
+          # X-Forwarded-Host unconditionally.
+          hostname = EndPointBlank::BaseUrl.hostname_from_rack_env(request.env)
           auth = Authorization.header(hostname)
           body = {
             path: path,
