@@ -71,7 +71,7 @@ module EndPointBlank
         if forwarded_host
           [forwarded_host_part, forwarded_host_authority_port]
         else
-          split_authority(env["HTTP_HOST"] || env["SERVER_NAME"])
+          split_authority(host_authority(env))
         end
 
       scheme = forwarded_scheme || (proxied ? nil : clean_scheme(env["rack.url_scheme"]))
@@ -102,7 +102,7 @@ module EndPointBlank
     def hostname_from_rack_env(env)
       return nil unless env.is_a?(Hash)
 
-      host_part, _authority_port = split_authority(env["HTTP_HOST"] || env["SERVER_NAME"])
+      host_part, _authority_port = split_authority(host_authority(env))
       clean_host(host_part)
     end
 
@@ -114,6 +114,33 @@ module EndPointBlank
 
       hops = value.split(",").map(&:strip).reject(&:empty?)
       hops.last
+    end
+
+    # The authority the caller named, for both resolution paths.
+    #
+    # An empty Host header is treated as ABSENT, not as a present-but-unusable
+    # value. A caller that sends `Host:` with nothing after it has said nothing
+    # about which host it meant, so there is nothing there to prefer over
+    # SERVER_NAME. Falling through concedes no control the caller did not
+    # already have either: SERVER_NAME is a server-side value, not one a
+    # request can steer.
+    #
+    # On the authorize path the alternative is worse than cosmetic. Resolving
+    # the host to nil there drops the request to Basic auth and skips the token
+    # mint entirely, where falling through yields a usable
+    # application-environment lookup key.
+    #
+    # This CHANGES Ruby's behavior: an empty Host header used to resolve the
+    # host to nil. `env["HTTP_HOST"] || env["SERVER_NAME"]` stops at "" because
+    # "" is truthy in Ruby. Python, Java and JS already fell through, because
+    # "" is falsy there; Ruby and Elixir stopped, because "" is truthy in both.
+    # One expression written five times, diverging only on the empty case. It
+    # now lives at one site per SDK, and this comment is why.
+    #
+    # `.to_s.empty?` so a nil Host header takes the same branch as an empty one.
+    def host_authority(env)
+      host = env["HTTP_HOST"]
+      host.to_s.empty? ? env["SERVER_NAME"] : host
     end
 
     # "api.example.com:8443" -> ["api.example.com", "8443"]
