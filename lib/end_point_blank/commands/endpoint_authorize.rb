@@ -58,7 +58,11 @@ module EndPointBlank
           response = Http.post(configuration.authorize_url, auth, body)
 
           if response&.status == 401 && auth.to_s.start_with?("Bearer ")
-            EndPointBlank::AccessTokens.instance.remove(hostname)
+            # Hand back the token that was rejected rather than clearing
+            # whatever is held now: under load it may already have been replaced
+            # by another request that got here first, and dropping that one
+            # would send the whole wave to exchange again.
+            EndPointBlank::AccessTokens.instance.invalidate(auth.to_s.delete_prefix("Bearer "))
             auth = Authorization.header(hostname)
             response = Http.post(configuration.authorize_url, auth, body)
           end

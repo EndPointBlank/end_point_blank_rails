@@ -52,7 +52,7 @@ RSpec.describe EndPointBlank::Commands::EndpointAuthorize do
 
     original.each { |ivar, value| configuration.instance_variable_set(ivar, value) }
     EndPointBlank::Commands::AuthenticationCache.instance.clear
-    EndPointBlank::AccessTokens.instance.clear(nil)
+    EndPointBlank::AccessTokens.instance.clear
     EndPointBlank::Rack::EnvStore.clear
   end
 
@@ -62,7 +62,7 @@ RSpec.describe EndPointBlank::Commands::EndpointAuthorize do
     configuration.client_secret = "csecret"
     configuration.app_name = "spec-app"
     EndPointBlank::Commands::AuthenticationCache.instance.clear
-    EndPointBlank::AccessTokens.instance.clear(nil)
+    EndPointBlank::AccessTokens.instance.clear
     EndPointBlank::Rack::EnvStore.clear
 
     allow(Excon).to receive(:post) do |url, options|

@@ -15,14 +15,14 @@ RSpec.describe EndPointBlank::Authorization do
     example.run
 
     original.each { |ivar, value| configuration.instance_variable_set(ivar, value) }
-    EndPointBlank::AccessTokens.instance.clear(nil)
+    EndPointBlank::AccessTokens.instance.clear
   end
 
   before do
     allow(EndPointBlank).to receive(:logger).and_return(logger)
     configuration.client_id = "cid"
     configuration.client_secret = "csecret"
-    EndPointBlank::AccessTokens.instance.clear(nil)
+    EndPointBlank::AccessTokens.instance.clear
   end
 
   describe ".header" do
