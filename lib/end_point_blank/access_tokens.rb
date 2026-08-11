@@ -52,6 +52,12 @@ module EndPointBlank
           @entry = { token: payload[:token], expired_at: Time.parse(payload[:expired_at]) }.freeze
           @entry[:token]
         else
+          # Discard whatever is held rather than leaving it behind. Only a token
+          # already inside the refresh buffer reaches an exchange, so what would
+          # be kept is close to death — and exists?, whose floor is 30 seconds,
+          # would go on calling it usable right up to the 401 it is about to earn.
+          @entry = nil
+
           # Hash#fetch raises on a missing key, so the old `payload&.fetch('error')`
           # turned a handled token failure into a KeyError — a 500 raised by the
           # logging of an error, on the path that exists to fail gracefully.
