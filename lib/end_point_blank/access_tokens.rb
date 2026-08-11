@@ -23,6 +23,9 @@ module EndPointBlank
     # trip, so it answers no while there is barely any life left.
     PRESENCE_WINDOW = 30
 
+    # How long to hold a token whose expiry the intake sent unreadably.
+    DEFAULT_LIFETIME = 3600
+
     def initialize
       @mutex = Mutex.new
       @entry = nil
@@ -49,7 +52,7 @@ module EndPointBlank
         payload = Commands::GenerateAccessToken.token(hostname)
 
         if payload && payload[:token]
-          @entry = { token: payload[:token], expired_at: Time.parse(payload[:expired_at]) }.freeze
+          @entry = { token: payload[:token], expired_at: parse_expiry(payload[:expired_at]) }.freeze
           @entry[:token]
         else
           # Discard whatever is held rather than leaving it behind. Only a token
@@ -111,6 +114,23 @@ module EndPointBlank
 
     def usable?(entry)
       !entry.nil? && entry[:expired_at] > Time.now + REFRESH_WINDOW
+    end
+
+    # Time.parse raises on anything it cannot read — an ArgumentError for a
+    # string it fails to understand, a TypeError for a value that is not a
+    # string at all, including the nil left by a missing key. This runs inside
+    # the mutex on the path a caller's request goes through, so a malformed
+    # timestamp from the intake came out of Authorization.header and into the
+    # host application's request.
+    #
+    # An hour is a guess, but a working one. Treating the token as unusable
+    # instead would mean an exchange on every inbound request for as long as
+    # the far end misbehaves, and if the token really does die sooner, the 401
+    # retry invalidates it and mints another.
+    def parse_expiry(value)
+      Time.parse(value.to_s)
+    rescue ArgumentError, TypeError
+      Time.now + DEFAULT_LIFETIME
     end
   end
 end
