@@ -237,6 +237,47 @@ RSpec.describe "EndPointBlank::AccessTokens against the token endpoint" do
     )
   end
 
+  # Time.parse raises on anything it cannot read, and this runs inside the
+  # mutex on the path a caller's request goes through -- so a malformed
+  # timestamp from the intake came out of Authorization.header and into the
+  # host application's request. An hour is a guess, but it is a working one:
+  # treating the token as unusable instead would mean an exchange on every
+  # inbound request for as long as the far end misbehaves, and if the token
+  # really does die sooner the 401 retry invalidates it and mints another.
+  describe "when the intake sends an expiry that cannot be read" do
+    def issue_with_expiry(expired_at)
+      allow(Excon).to receive(:post).and_return(
+        double("response", status: 200, body: JSON.generate(token: "tok-1", expired_at: expired_at))
+      )
+    end
+
+    it "keeps the token for an hour rather than raising, when the expiry is not a timestamp" do
+      issue_with_expiry("whenever")
+
+      expect { instance.token(hostname) }.not_to raise_error
+
+      expect(instance.token(hostname)).to eq("tok-1")
+      expect(instance.exists?).to be(true)
+      expect(Excon).to have_received(:post).once
+    end
+
+    it "does the same when the expiry is not a string at all" do
+      issue_with_expiry(1_735_689_600)
+
+      expect(instance.token(hostname)).to eq("tok-1")
+      expect(instance.exists?).to be(true)
+    end
+
+    it "does the same when the expiry is missing entirely" do
+      allow(Excon).to receive(:post).and_return(
+        double("response", status: 200, body: JSON.generate(token: "tok-1"))
+      )
+
+      expect(instance.token(hostname)).to eq("tok-1")
+      expect(instance.exists?).to be(true)
+    end
+  end
+
   describe "when the intake will not issue a token" do
     # Regression: this branch used Hash#fetch with a string key against a
     # symbol-keyed hash, so the code path that exists to fail gracefully
