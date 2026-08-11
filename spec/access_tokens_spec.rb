@@ -13,14 +13,14 @@ RSpec.describe EndPointBlank::AccessTokens do
   let(:instance) { described_class.instance }
   let(:hostname) { "access-tokens-spec.example.test" }
 
-  after do
-    instance.instance_variable_get(:@tokens).delete(hostname)
-    instance.instance_variable_get(:@mutexes).delete(hostname)
-  end
+  after { instance.clear }
 
-  def seed_cached_token(expires_at:)
-    instance.instance_variable_get(:@tokens)[hostname] = { token: "cached-token", expired_at: expires_at }
-    instance.instance_variable_get(:@mutexes)[hostname] ||= Mutex.new
+  # Seeds through the public path rather than the ivars, so these keep meaning
+  # something if the cache is reshaped again.
+  def cache_token_expiring_in(seconds)
+    allow(EndPointBlank::Commands::GenerateAccessToken).to receive(:token)
+      .and_return(token: "cached-token", expired_at: (Time.now + seconds).iso8601)
+    instance.token(hostname)
   end
 
   it "does not raise NoMethodError (ActiveSupport is not loaded in this spec environment)" do
@@ -28,17 +28,16 @@ RSpec.describe EndPointBlank::AccessTokens do
   end
 
   it "treats a token expiring 5 minutes out as still valid and returns the cached token" do
-    seed_cached_token(expires_at: Time.now + (5 * 60))
+    cache_token_expiring_in(5 * 60)
 
-    expect(EndPointBlank::Commands::GenerateAccessToken).not_to receive(:token)
     expect(instance.token(hostname)).to eq("cached-token")
+    expect(EndPointBlank::Commands::GenerateAccessToken).to have_received(:token).once
   end
 
   it "treats a token expiring 1 minute out as expired and fetches a fresh token" do
-    seed_cached_token(expires_at: Time.now + 60)
+    cache_token_expiring_in(60)
 
     allow(EndPointBlank::Commands::GenerateAccessToken).to receive(:token)
-      .with(hostname)
       .and_return(token: "fresh-token", expired_at: (Time.now + 3600).iso8601)
 
     expect(instance.token(hostname)).to eq("fresh-token")
@@ -48,7 +47,7 @@ RSpec.describe EndPointBlank::AccessTokens do
   # the wire) must be parsed into a plain Time, not a DateTime -- comparing
   # DateTime > Time raises `ArgumentError: comparison of DateTime with Time
   # failed` in plain Ruby (no ActiveSupport patches this), which would have
-  # crashed the *very next* cache-hit lookup for the same hostname.
+  # crashed the *very next* cache-hit lookup.
   it "serves a second cache-hit lookup from a freshly-fetched token without raising" do
     allow(EndPointBlank::Commands::GenerateAccessToken).to receive(:token)
       .with(hostname)
@@ -85,14 +84,14 @@ RSpec.describe "EndPointBlank::AccessTokens against the token endpoint" do
     example.run
 
     configuration.token_ttl = original_ttl
-    instance.clear(nil)
+    instance.clear
   end
 
   before do
     allow(EndPointBlank).to receive(:logger).and_return(logger)
     configuration.client_id = "cid"
     configuration.client_secret = "csecret"
-    instance.clear(nil)
+    instance.clear
 
     allow(Excon).to receive(:post) do
       double(
@@ -114,25 +113,37 @@ RSpec.describe "EndPointBlank::AccessTokens against the token endpoint" do
     expect(Excon).to have_received(:post).once
   end
 
-  # Hostnames arrive from the Host header, whose casing is the caller's choice.
-  # Treating them as distinct would mean a fresh token exchange per casing.
-  it "treats a hostname as case-insensitive" do
-    instance.token("Tokens.Example.Test")
-    instance.token("tokens.example.test")
+  # The intake binds a token to the application environment the credential
+  # belongs to, not to the hostname the request names -- one process
+  # authenticates as one application environment, so one token covers it.
+  # Keying on the hostname meant the Host header, which the caller chooses,
+  # could drive a token exchange and an intake database lookup per novel value.
+  it "serves every hostname from the one token" do
+    expect(instance.token("one.example.test")).to eq("tok-1")
+    expect(instance.token("two.example.test")).to eq("tok-1")
+    expect(instance.token("never-seen.example.test")).to eq("tok-1")
 
     expect(Excon).to have_received(:post).once
   end
 
-  it "keeps a separate token per hostname" do
-    expect(instance.token("one.example.test")).to eq("tok-1")
-    expect(instance.token("two.example.test")).to eq("tok-2")
+  it "keeps serving the cached token while the intake refuses to issue new ones" do
+    instance.token(hostname)
+    allow(Excon).to receive(:post).and_return(
+      double("response", status: 422, body: JSON.generate(error: "revoked"))
+    )
+
+    expect(instance.token("anything.example.test")).to eq("tok-1")
+    expect(instance.exists?).to be(true)
   end
 
-  it "reports a live token as present, and an unknown hostname as absent" do
+  it "reports a live token as present" do
     instance.token(hostname)
 
-    expect(instance.exists?(hostname)).to be(true)
-    expect(instance.exists?("never-seen.example.test")).to be(false)
+    expect(instance.exists?).to be(true)
+  end
+
+  it "reports no token as absent before anything has been issued" do
+    expect(instance.exists?).to be(false)
   end
 
   it "treats a token that is about to expire as absent" do
@@ -143,23 +154,46 @@ RSpec.describe "EndPointBlank::AccessTokens against the token endpoint" do
     )
     instance.token(hostname)
 
-    expect(instance.exists?(hostname)).to be(false)
+    expect(instance.exists?).to be(false)
   end
 
-  it "exchanges again after the token is removed" do
-    instance.token(hostname)
-    instance.remove(hostname)
+  it "exchanges again after the current token is invalidated" do
+    first = instance.token(hostname)
+    instance.invalidate(first)
 
     expect(instance.token(hostname)).to eq("tok-2")
   end
 
-  it "exchanges again for every hostname after a clear" do
+  # What stops a 401 from stampeding. Every request in flight when a token is
+  # rejected reports the same stale value; only the first should cause an
+  # exchange, because the rest are holding a token that has already been
+  # replaced and clearing for them would discard a good one.
+  it "ignores an invalidation for a token that has already been replaced" do
+    first = instance.token(hostname)
+    instance.invalidate(first)
+    instance.token(hostname)
+
+    instance.invalidate(first)
+
+    expect(instance.token(hostname)).to eq("tok-2")
+    expect(Excon).to have_received(:post).twice
+  end
+
+  it "ignores an invalidation with no token" do
+    instance.token(hostname)
+
+    instance.invalidate(nil)
+
+    expect(instance.token(hostname)).to eq("tok-1")
+    expect(Excon).to have_received(:post).once
+  end
+
+  it "exchanges again after a clear" do
     instance.token("one.example.test")
-    instance.token("two.example.test")
 
-    instance.clear(nil)
+    instance.clear
 
-    expect(instance.token("one.example.test")).to eq("tok-3")
+    expect(instance.token("two.example.test")).to eq("tok-2")
   end
 
   it "passes the configured token lifetime to the intake" do

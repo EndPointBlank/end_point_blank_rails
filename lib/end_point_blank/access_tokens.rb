@@ -4,36 +4,53 @@ require 'singleton'
 require "time"
 
 module EndPointBlank
-  # Thread-safe singleton cache for storing access tokens per hostname
+  # Holds this process's access token.
+  #
+  # The intake issues a token against the application environment that the
+  # authenticating credential belongs to. The hostname sent with a generation
+  # request only resolves the target server-side; it is not what the token is
+  # scoped to. A process authenticates as exactly one application environment,
+  # so it needs exactly one token, whatever hostnames its callers address it by.
   class AccessTokens
     include Singleton
 
-    def initialize()
-      @tokens = {}
-      @mutexes = {}
+    # Replace a token this far ahead of its expiry. An expired token can never
+    # be revived, only replaced, so going early is what keeps an in-flight
+    # request from carrying one that dies before it lands.
+    REFRESH_WINDOW = 120
+
+    # exists? is used to decide whether a caller can proceed without a round
+    # trip, so it answers no while there is barely any life left.
+    PRESENCE_WINDOW = 30
+
+    def initialize
+      @mutex = Mutex.new
+      @entry = nil
     end
 
     def self.token(arg)
       instance.token(arg)
     end
 
-    # Retrieve or generate an access token for the given hostname
-    # @param hostname [String] The hostname for which to retrieve the token
+    # Retrieve the token, generating one if none is held or it is near expiry
+    # @param hostname [String] the hostname to send with a generation request.
+    #   It tells the intake which application environment to resolve and does
+    #   not select which cached token comes back -- every caller shares one.
     # @return [String, nil] The access token or nil if generation fails
-    def token(arg)
-      hostname = arg.downcase
-      @mutexes[hostname] ||= Mutex.new
-      @mutexes[hostname].synchronize do
-        # Return cached token if it exists and is not expired
-        return @tokens[hostname][:token] if @tokens.key?(hostname) && @tokens[hostname][:expired_at] > Time.now + 120
+    def token(hostname)
+      current = @entry
+      return current[:token] if usable?(current)
 
-        # Fetch new token
+      @mutex.synchronize do
+        # Another caller may have replaced it while this one waited.
+        current = @entry
+        return current[:token] if usable?(current)
+
         payload = Commands::GenerateAccessToken.token(hostname)
 
         if payload && payload[:token]
-          payload[:expired_at] = Time.parse(payload[:expired_at])
-          @tokens[hostname] = payload
-          payload[:token]
+          @entry = { token: payload[:token], expired_at: Time.parse(payload[:expired_at]) }.freeze
+          @entry[:token]
         else
           # Hash#fetch raises on a missing key, so the old `payload&.fetch('error')`
           # turned a handled token failure into a KeyError — a 500 raised by the
@@ -53,32 +70,41 @@ module EndPointBlank
       end
     end
 
-    # Clear all tokens from the cache
-    # @return [Hash] Empty hash
-    def clear(arg)
-      @mutexes.keys.each do |hostname|
-        @mutexes[hostname].synchronize do
-          @tokens.delete(hostname)
-        end
+    # Discard the held token
+    # @return [nil]
+    def clear
+      @mutex.synchronize { @entry = nil }
+    end
+
+    # Discard the held token, but only if it is still the one the caller had
+    #
+    # Every request in flight when a token is rejected reports the same stale
+    # value. Only the first of them should cause an exchange -- the rest are
+    # holding a token that has already been replaced, and clearing on their
+    # behalf would discard a good token and stampede the intake.
+    #
+    # @param stale_token [String, nil] the token the caller was rejected for;
+    #   ignored when it is not the one currently held
+    # @return [nil]
+    def invalidate(stale_token)
+      return if stale_token.nil?
+
+      @mutex.synchronize do
+        @entry = nil if @entry && @entry[:token] == stale_token
       end
     end
 
-    # Remove token for a specific hostname
-    # @param hostname [String] The hostname for which to remove the token
-    # @return [Object, nil] The removed token data or nil if not found
-    def remove(arg)
-      hostname = arg.downcase
-      @mutexes[hostname].synchronize do
-        @tokens.delete(hostname)
-      end
+    # Check whether a token is held and is not about to expire
+    # @return [Boolean]
+    def exists?
+      entry = @entry
+      !entry.nil? && entry[:expired_at] > Time.now + PRESENCE_WINDOW
     end
 
-    # Check if a valid token exists for a given hostname
-    # @param hostname [String] The hostname to check
-    # @return [Boolean] True if a valid token exists, false otherwise
-    def exists?(arg)
-      hostname = arg.downcase
-      @tokens.key?(hostname) && @tokens[hostname][:expired_at] > Time.now + 30
+    private
+
+    def usable?(entry)
+      !entry.nil? && entry[:expired_at] > Time.now + REFRESH_WINDOW
     end
   end
 end
