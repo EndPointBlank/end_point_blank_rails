@@ -126,7 +126,7 @@ RSpec.describe "EndPointBlank::AccessTokens against the token endpoint" do
     expect(Excon).to have_received(:post).once
   end
 
-  it "keeps serving the cached token while the intake refuses to issue new ones" do
+  it "serves a live token without asking, so a refused hostname cannot disturb it" do
     instance.token(hostname)
     allow(Excon).to receive(:post).and_return(
       double("response", status: 422, body: JSON.generate(error: "revoked"))
@@ -134,6 +134,25 @@ RSpec.describe "EndPointBlank::AccessTokens against the token endpoint" do
 
     expect(instance.token("anything.example.test")).to eq("tok-1")
     expect(instance.exists?).to be(true)
+  end
+
+  it "discards the token it could not replace when a refresh fails" do
+    # Only a token already inside the refresh buffer reaches an exchange, so the
+    # one left behind is always close to death. Keeping it means exists? --
+    # whose floor is 30 seconds -- goes on calling it usable, and a caller
+    # acting on that presents a credential the intake is about to reject.
+    allow(Excon).to receive(:post).and_return(
+      double("response", status: 200,
+                         body: JSON.generate(token: "nearly-dead", expired_at: (Time.now + 60).utc.iso8601))
+    )
+    instance.token(hostname)
+
+    allow(Excon).to receive(:post).and_return(
+      double("response", status: 422, body: JSON.generate(error: "revoked"))
+    )
+
+    expect(instance.token(hostname)).to be_nil
+    expect(instance.exists?).to be(false)
   end
 
   it "reports a live token as present" do
