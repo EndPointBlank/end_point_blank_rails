@@ -29,7 +29,7 @@ RSpec.describe EndPointBlank::Commands::EndpointAuthorize do
 
   def request_double(auth: "Bearer client-token", method: "GET", pattern: "/widgets(.:format)",
                      host: "api.example.test", ip: "203.0.113.7", uuid: "req-1",
-                     path: "/widgets", version: "v1")
+                     path: "/widgets", version: "v1", env: nil)
     double(
       "request",
       headers: { "Authorization" => auth },
@@ -39,7 +39,8 @@ RSpec.describe EndPointBlank::Commands::EndpointAuthorize do
       remote_ip: ip,
       uuid: uuid,
       path: path,
-      params: { "version" => version }
+      params: { "version" => version },
+      env: env || { "HTTP_HOST" => host }
     )
   end
 
@@ -283,6 +284,64 @@ RSpec.describe EndPointBlank::Commands::EndpointAuthorize do
       described_class.authorize(request_double)
 
       expect(logger).not_to have_received(:error)
+    end
+  end
+
+  # request_double's `host:` stands in for the old ActionDispatch::Request#host
+  # (which reads the last X-Forwarded-Host hop unconditionally); `env:` is
+  # what BaseUrl.hostname_from_rack_env reads instead. Every example below was
+  # verified, by temporarily reverting the rewire at endpoint_authorize.rb's
+  # `hostname = ...` line back to `request.host`, to fail before the rewire
+  # and pass after it -- `host:` is always set to a value the correct,
+  # env-derived answer cannot equal, so a reversion is always caught here.
+  #
+  # Only "ignores X-Forwarded-Host" models the actual production risk this
+  # task exists to fix: its `host:` is the value a real, proxied
+  # ActionDispatch::Request#host returns today (the forwarded hop), while
+  # `env:` carries the true Host header alongside it, so this example
+  # reproduces the real pre-fix/post-fix behavior change described in the
+  # README. The other three examples' `host:` values are not standing in for
+  # any real request shape -- they are arbitrary sentinels chosen only to
+  # prove `env`, not `host`, is now the source consulted; they exercise the
+  # resolver's own contract (case normalization, IPv6, and the
+  # unusable-host/no-token-minted guarantee) via this command, not the
+  # forwarding divergence.
+  describe "the hostname it reports and keys its token cache on" do
+    it "lowercases it and strips the port" do
+      described_class.authorize(request_double(host: "internal.svc", env: { "HTTP_HOST" => "API.Example.TEST:3000" }))
+
+      expect(authorize_calls.first[:body][:target_hostname]).to eq("api.example.test")
+    end
+
+    it "keeps an IPv6 literal whole and bracketed" do
+      described_class.authorize(request_double(host: "internal.svc", env: { "HTTP_HOST" => "[2001:DB8::1]:8443" }))
+
+      expect(authorize_calls.first[:body][:target_hostname]).to eq("[2001:db8::1]")
+    end
+
+    it "ignores X-Forwarded-Host" do
+      described_class.authorize(request_double(
+                                  host: "api.example.test",
+                                  env: { "HTTP_HOST" => "internal.svc", "HTTP_X_FORWARDED_HOST" => "api.example.test" }
+                                ))
+
+      expect(authorize_calls.first[:body][:target_hostname]).to eq("internal.svc")
+    end
+
+    # target_hostname is the portal's application-environment lookup key. A
+    # value matching no registered row is a hard 422, not a cache miss -- so
+    # an unusable Host must fall back to Basic and never mint or cache a
+    # Bearer token, even under a hostname ("api.example.test") that looks
+    # perfectly valid on its own.
+    it "authenticates with Basic and mints no token when the host is unusable" do
+      described_class.authorize(request_double(
+                                  host: "api.example.test",
+                                  env: { "HTTP_HOST" => "api.example.test/../evil" }
+                                ))
+
+      expect(authorize_calls.first[:body][:target_hostname]).to be_nil
+      expect(authorize_calls.first[:auth]).to start_with("Basic ")
+      expect(EndPointBlank::AccessTokens.instance.exists?).to be(false)
     end
   end
 end

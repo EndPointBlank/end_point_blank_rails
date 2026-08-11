@@ -88,6 +88,24 @@ module EndPointBlank
       resolved
     end
 
+    # The hostname alone, for the authorize path.
+    #
+    # Deliberately NOT from_rack_env(env)[:host]: reads the Host header only,
+    # never the forwarded chain, however trust_proxy_headers is set. The
+    # value feeds `target_hostname` and the access-token cache key, and the
+    # portal resolves an application environment from it -- a value matching
+    # no registered row is a hard 422 with no fallback, not a cache miss.
+    #
+    # Composed from the same split_authority/clean_host pair from_rack_env
+    # uses, so IPv6 bracketing, lowercasing, and shape and length validation
+    # are identical between the two; only the authority's source differs.
+    def hostname_from_rack_env(env)
+      return nil unless env.is_a?(Hash)
+
+      host_part, _authority_port = split_authority(env["HTTP_HOST"] || env["SERVER_NAME"])
+      clean_host(host_part)
+    end
+
     # A proxy that appends writes its own observation last. A proxy that
     # overwrites (nginx, Caddy, ALB) emits one value, where first and last are
     # the same thing.
