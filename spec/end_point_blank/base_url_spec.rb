@@ -182,6 +182,18 @@ RSpec.describe EndPointBlank::BaseUrl do
     expect(described_class.from_rack_env(env("HTTP_HOST" => "a" * 254))).not_to have_key(:host)
   end
 
+  it "treats an empty Host header as absent and falls through to SERVER_NAME" do
+    # The cross-SDK contract: an empty Host header says nothing about which
+    # host the caller meant, so all five clients fall through to the server
+    # name rather than stopping on a present-but-unusable value. A deliberate
+    # change from Ruby's previous behavior -- "" is truthy here, so the old
+    # `HTTP_HOST || SERVER_NAME` stopped at the empty string and resolved the
+    # host to nil.
+    resolved = described_class.from_rack_env(env("HTTP_HOST" => ""))
+
+    expect(resolved).to eq(scheme: "https", host: "api.example.com", port: 8443)
+  end
+
   describe ".hostname_from_rack_env" do
     it "lowercases the host and strips the port" do
       expect(described_class.hostname_from_rack_env(env)).to eq("api.example.com")
@@ -206,6 +218,18 @@ RSpec.describe EndPointBlank::BaseUrl do
       resolved = described_class.hostname_from_rack_env(env("HTTP_HOST" => nil))
 
       expect(resolved).to eq("api.example.com")
+    end
+
+    it "treats an empty Host header as absent and falls through to SERVER_NAME" do
+      resolved = described_class.hostname_from_rack_env(env("HTTP_HOST" => ""))
+
+      expect(resolved).to eq("api.example.com")
+    end
+
+    it "is nil for an empty Host header with no SERVER_NAME to fall through to" do
+      resolved = described_class.hostname_from_rack_env(env("HTTP_HOST" => "", "SERVER_NAME" => nil))
+
+      expect(resolved).to be_nil
     end
 
     it "is nil for a host that is not shaped like a hostname" do
