@@ -492,6 +492,85 @@ RSpec.describe "EndPointBlank::AccessTokens against the token endpoint" do
     end
   end
 
+  # A cold cache never runs the comparison inside match_key (the loop body
+  # has nothing to iterate), so it cannot raise -- it proceeds to mint with
+  # the bad base_url and takes intake's response as an ordinary miss. A spec
+  # that does not warm the cache first would pass whether or not the guard
+  # exists, so every example here seeds a live entry before exercising the
+  # nil/empty argument.
+  describe "guarding against a nil or empty base_url" do
+    it "does not raise when asked for a token with a nil base_url and the cache is warm" do
+      instance.token(base_url)
+
+      result = nil
+      expect { result = instance.token(nil) }.not_to raise_error
+      expect(result).to be_nil
+    end
+
+    it "does not raise when checking existence with a nil base_url and the cache is warm" do
+      instance.token(base_url)
+
+      result = nil
+      expect { result = instance.exists?(nil) }.not_to raise_error
+      expect(result).to be(false)
+    end
+
+    # Ruby's String#start_with? does not raise on an empty receiver, so an
+    # empty base_url can't reproduce nil's NoMethodError. What it can do is
+    # exact-match a stray entry keyed by "" -- which happens because
+    # `key = payload && payload[:base_url]` treats "" as truthy, so a
+    # response that echoes an empty base_url back gets cached under "" like
+    # any other key. A later call with an empty base_url must not be served
+    # from that entry.
+    it "does not resurrect a token cached under an empty base_url" do
+      instance.token("") # cold cache; the default stub echoes "" back as base_url
+      expect(Excon).to have_received(:post).once
+
+      instance.token("")
+
+      expect(Excon).to have_received(:post).twice
+    end
+
+    it "does not report an empty base_url as covered by a token cached under an empty base_url" do
+      instance.token("")
+
+      expect(instance.exists?("")).to be(false)
+    end
+  end
+
+  # The success path stores the key intake just resolved to, but until now
+  # never dropped the key that got matched on the way in. When a refresh
+  # resolves to a shorter canonical base_url, the old, longer key keeps
+  # winning "longest match wins" forever -- it is never usable (that is why
+  # a refresh was triggered), so every subsequent call mints again instead of
+  # reading the fresh entry sitting right next to it.
+  describe "evicting a stale key when a refresh resolves to a different base_url" do
+    it "removes the previously matched key so a later lookup is served from cache, not minted again" do
+      matched = "https://evict.example.test/orders"
+      canonical = "https://evict.example.test"
+      call_count = 0
+
+      allow(Excon).to receive(:post) do |_url, _options|
+        call_count += 1
+        if call_count == 1
+          double("response", status: 200,
+                             body: JSON.generate(token: "near-dead", expired_at: (Time.now + 60).utc.iso8601,
+                                                 base_url: matched))
+        else
+          double("response", status: 200,
+                             body: JSON.generate(token: "canonical-token", expired_at: (Time.now + 3600).utc.iso8601,
+                                                 base_url: canonical))
+        end
+      end
+
+      instance.token(matched) # seeds a near-dead entry under `matched`
+      instance.token(matched) # inside the refresh window; intake resolves to the shorter `canonical` this time
+
+      expect(instance.token(matched)).to eq("canonical-token")
+      expect(Excon).to have_received(:post).twice
+    end
+  end
+
   describe "thread safety" do
     # The cached token is read without the mutex; the mutex is only taken to
     # exchange. A caller that waited for it has to re-read rather than

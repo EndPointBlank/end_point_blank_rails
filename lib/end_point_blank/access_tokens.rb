@@ -75,9 +75,21 @@ module EndPointBlank
         key = payload && payload[:base_url]
 
         if payload && payload[:token] && key
-          @entries = @entries.merge(
+          # The match that led here may have resolved under a different key
+          # than the one intake just returned -- an environment's base URL
+          # can change to a shorter path in the portal. Drop that stale key
+          # when it differs from the fresh one, or it goes on shadowing it:
+          # being the longer of the two, it keeps winning "longest match
+          # wins", keeps failing usable?, and keeps forcing a mint on every
+          # call until the process restarts. The failure branch below already
+          # does the equivalent for a match that turned out unusable; this is
+          # the same cleanup for a match that turned out to have moved.
+          stale = match_key(base_url, @entries)
+          new_entries = @entries.merge(
             key => { token: payload[:token], expired_at: parse_expiry(payload[:expired_at]) }.freeze
-          ).freeze
+          )
+          new_entries = new_entries.reject { |k, _| k == stale } if stale && stale != key
+          @entries = new_entries.freeze
           payload[:token]
         else
           # A failed refresh must not leave an expiring token behind claiming
@@ -134,6 +146,14 @@ module EndPointBlank
 
     # Returns the longest key in entries covering base_url, or nil.
     #
+    # A nil or empty base_url never matches. An empty cache can't raise on
+    # one -- the loop body never runs -- so a non-empty cache must not either,
+    # or the same call succeeds or raises NoMethodError (nil has no
+    # start_with?) depending on unrelated traffic that happened to warm the
+    # cache first. Checking once, here, keeps every caller consistent for
+    # free: the lookup, the stale-entry cleanup on a failed refresh, and the
+    # stale-entry cleanup on a successful one.
+    #
     # Deliberately not a port of intake's matcher: no normalization on either
     # side. A caller that passes a non-canonical URL simply misses and mints
     # again, which costs one HTTP call and is never a wrong answer.
@@ -143,6 +163,8 @@ module EndPointBlank
     # which snapshot is being scanned instead of this method reaching for
     # whatever @entries happens to be at the moment it runs.
     def match_key(base_url, entries)
+      return nil if base_url.nil? || base_url.empty?
+
       best = nil
       entries.each_key do |key|
         next unless base_url == key || base_url.start_with?("#{key}/")
