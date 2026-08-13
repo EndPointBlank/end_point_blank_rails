@@ -32,4 +32,17 @@ RSpec.describe EndPointBlank::Commands::GenerateAccessToken do
     expect { result = described_class.token("host.example.com") }.not_to raise_error
     expect(result).to be_nil
   end
+
+  it "logs the response status without the response body, which may carry a live bearer token" do
+    allow(Excon).to receive(:post).and_return(
+      double(status: 201, body: '{"token":"tok-secret-value","expired_at":"2026-08-13T18:00:00Z","base_url":"https://example.com"}')
+    )
+
+    described_class.token("https://example.com")
+
+    expect(logger).to have_received(:info) do |message|
+      expect(message).to include("201")
+      expect(message).not_to include("tok-secret-value")
+    end
+  end
 end

@@ -208,8 +208,9 @@ module EndPointBlank
     #
     # An hour is a guess, but a working one. Treating the token as unusable
     # instead would mean an exchange on every inbound request for as long as
-    # the far end misbehaves, and if the token really does die sooner, the 401
-    # retry invalidates it and mints another.
+    # the far end misbehaves. There is no retry here if the token dies sooner
+    # than the guess -- invalidate has no caller on this path -- so a bad
+    # guess means 401s until the cache's own expiry-based refresh catches up.
     def parse_expiry(value)
       Time.parse(value.to_s)
     rescue ArgumentError, TypeError

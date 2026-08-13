@@ -23,7 +23,7 @@ module EndPointBlank
             body: body.to_json,
             **EndPointBlank::Commands::Http::TIMEOUT_OPTIONS
           )
-          EndPointBlank.logger.info "Authentication response: #{response.status} - #{response.body}"
+          EndPointBlank.logger.info "Authentication response: #{response.status}"
           parsed_body = response.body.is_a?(String) ? JSON.parse(response.body) : response.body
           parsed_body.transform_keys(&:to_sym)
         rescue => e
