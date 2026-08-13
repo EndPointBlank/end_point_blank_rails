@@ -12,8 +12,8 @@ module EndPointBlank
           EndPointBlank::Configuration.instance
         end
 
-        def token(hostname)
-          body = {hostname: hostname}
+        def token(base_url)
+          body = {base_url: base_url}
           if configuration.token_ttl
             body[:token_ttl] = configuration.token_ttl
           end

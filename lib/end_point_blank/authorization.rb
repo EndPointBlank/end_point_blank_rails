@@ -9,9 +9,17 @@ module EndPointBlank
         EndPointBlank::Configuration.instance
       end
 
-      def header(hostname = nil)
+      # Builds an outbound Authorization header value.
+      # @param base_url [String, nil] the URL you are about to call, with any
+      #   query string and fragment removed. If given, a token covering it is
+      #   used (minting one if necessary) and returned as a Bearer header.
+      #   Called with no argument this is the Basic form -- which is what the
+      #   calls to intake itself use, since intake already holds this
+      #   service's own credential.
+      # @return [String] "Bearer <token>" or "Basic <credentials>"
+      def header(base_url = nil)
         token = nil
-        token = EndPointBlank::AccessTokens.token(hostname) if hostname
+        token = EndPointBlank::AccessTokens.token(base_url) if base_url
 
         if token
           "Bearer " + token

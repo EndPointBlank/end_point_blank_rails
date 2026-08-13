@@ -4,9 +4,12 @@ require "spec_helper"
 
 # This is the code that decides whether a caller's request is allowed to
 # proceed, so everything below drives the real object and stubs only Excon --
-# the actual network boundary. Both conversations that happen on the way
-# through (fetching our own access token, then asking intake to authorize) go
-# through Excon, so the stub dispatches on URL to keep them apart.
+# the actual network boundary. Authorizing a request is a single conversation
+# with intake now: this service presents its own Basic credentials, the same
+# ones AccessTokens would have exchanged for a Bearer token before -- minting
+# one to call the party that already holds the credential bought nothing, so
+# that hop, and the 401-retry that existed only to discard a stale Bearer, are
+# both gone. See "the credential it presents" below.
 #
 # rubocop:disable Metrics/BlockLength
 RSpec.describe EndPointBlank::Commands::EndpointAuthorize do
@@ -16,10 +19,9 @@ RSpec.describe EndPointBlank::Commands::EndpointAuthorize do
   let(:authorized_body) { JSON.generate(data: [{ "source_application_environment_id" => 42 }]) }
   let(:deprecated_body) { JSON.generate(data: [], deprecation: { "deprecated_at" => "2026-01-01T00:00:00Z" }) }
 
-  # Consumed in order; the last entry is reused so a retry test can assert on
-  # call counts rather than on queue bookkeeping.
+  # Consumed in order; the last entry is reused so tests can assert on call
+  # counts rather than on queue bookkeeping.
   let(:authorize_queue) { [http_response(201, authorized_body)] }
-  let(:token_queue) { %w[tok-1 tok-2 tok-3] }
 
   let(:authorize_calls) { [] }
 
@@ -53,6 +55,11 @@ RSpec.describe EndPointBlank::Commands::EndpointAuthorize do
 
     original.each { |ivar, value| configuration.instance_variable_set(ivar, value) }
     EndPointBlank::Commands::AuthenticationCache.instance.clear
+    # authorize no longer touches the token cache itself, but clearing it here
+    # stops a token minted by some other spec from lingering: a leftover entry
+    # would make "never requests an access token" pass even if a regression
+    # reintroduced the Bearer exchange, since Authorization.header would find
+    # a cache hit and never call the generator at all.
     EndPointBlank::AccessTokens.instance.clear
     EndPointBlank::Rack::EnvStore.clear
   end
@@ -66,24 +73,15 @@ RSpec.describe EndPointBlank::Commands::EndpointAuthorize do
     EndPointBlank::AccessTokens.instance.clear
     EndPointBlank::Rack::EnvStore.clear
 
-    allow(Excon).to receive(:post) do |url, options|
-      if url == configuration.access_token_url
-        token = token_queue.shift
-        if token
-          http_response(200, JSON.generate(token: token, expired_at: (Time.now + 3600).utc.iso8601))
-        else
-          http_response(401, JSON.generate(error: "no credentials"))
-        end
-      else
-        authorize_calls << {
-          body: JSON.parse(options[:body], symbolize_names: true),
-          auth: options[:headers]["Authorization"]
-        }
-        queued = authorize_queue.size > 1 ? authorize_queue.shift : authorize_queue.first
-        raise queued if queued.is_a?(Exception)
+    allow(Excon).to receive(:post) do |_url, options|
+      authorize_calls << {
+        body: JSON.parse(options[:body], symbolize_names: true),
+        auth: options[:headers]["Authorization"]
+      }
+      queued = authorize_queue.size > 1 ? authorize_queue.shift : authorize_queue.first
+      raise queued if queued.is_a?(Exception)
 
-        queued
-      end
+      queued
     end
   end
 
@@ -108,12 +106,6 @@ RSpec.describe EndPointBlank::Commands::EndpointAuthorize do
       described_class.authorize(request_double(pattern: "/widgets/:id(.:format)"))
 
       expect(authorize_calls.first[:body][:path]).to eq("/widgets/:id")
-    end
-
-    it "authenticates itself to intake with its own access token" do
-      described_class.authorize(request_double)
-
-      expect(authorize_calls.first[:auth]).to eq("Bearer tok-1")
     end
 
     it "returns the authorization service's response" do
@@ -225,36 +217,36 @@ RSpec.describe EndPointBlank::Commands::EndpointAuthorize do
     end
   end
 
-  describe "when intake rejects our own access token" do
-    it "discards the stale token, retries with a fresh one, and returns the second answer" do
-      authorize_queue.replace([http_response(401, JSON.generate(error: "expired")),
-                               http_response(201, authorized_body)])
+  # Basic, not Bearer: this call is to intake, which already holds this
+  # service's credential, so minting a token to present it back bought
+  # nothing. With no Bearer there is no stale token, so there is nothing left
+  # to retry either -- a 401 here means the credential itself is wrong.
+  describe "the credential it presents" do
+    it "authenticates with the configured Basic credentials" do
+      described_class.authorize(request_double)
 
-      result = described_class.authorize(request_double)
-
-      expect(authorize_calls.map { |call| call[:auth] }).to eq(["Bearer tok-1", "Bearer tok-2"])
-      expect(result.status).to eq(201)
+      expect(authorize_calls.first[:auth]).to eq("Basic #{Base64.strict_encode64("cid:csecret")}")
     end
 
-    it "returns the rejection when the fresh token is rejected too" do
-      authorize_queue.replace([http_response(401, JSON.generate(error: "expired"))])
+    # The pin for the whole change: no access token is minted for this call,
+    # under any circumstance -- there is no longer a code path in
+    # endpoint_authorize that could produce one.
+    it "never requests an access token" do
+      allow(EndPointBlank::Commands::GenerateAccessToken).to receive(:token)
 
-      result = described_class.authorize(request_double)
+      described_class.authorize(request_double)
 
-      expect(authorize_calls.size).to eq(2)
-      expect(result.status).to eq(401)
+      expect(EndPointBlank::Commands::GenerateAccessToken).not_to have_received(:token)
     end
 
-    # A Basic credential cannot have gone stale, so retrying with the identical
-    # header would only double the load intake sees for every rejected request.
-    it "does not retry when it authenticated with Basic credentials" do
-      token_queue.clear
+    # A Basic credential cannot have gone stale, so there is nothing for a
+    # retry to accomplish -- a 401 is surfaced as-is.
+    it "returns a rejection without retrying" do
       authorize_queue.replace([http_response(401, JSON.generate(error: "denied"))])
 
       result = described_class.authorize(request_double)
 
       expect(authorize_calls.size).to eq(1)
-      expect(authorize_calls.first[:auth]).to start_with("Basic ")
       expect(result.status).to eq(401)
     end
   end
@@ -303,10 +295,13 @@ RSpec.describe EndPointBlank::Commands::EndpointAuthorize do
   # README. The other three examples' `host:` values are not standing in for
   # any real request shape -- they are arbitrary sentinels chosen only to
   # prove `env`, not `host`, is now the source consulted; they exercise the
-  # resolver's own contract (case normalization, IPv6, and the
-  # unusable-host/no-token-minted guarantee) via this command, not the
-  # forwarding divergence.
-  describe "the hostname it reports and keys its token cache on" do
+  # resolver's own contract (case normalization and IPv6) via this command,
+  # not the forwarding divergence.
+  #
+  # This is purely a request-body field now -- target_hostname no longer feeds
+  # the access-token cache key, because this call no longer requests a token
+  # at all (see "the credential it presents" above).
+  describe "the hostname it reports" do
     it "lowercases it and strips the port" do
       described_class.authorize(request_double(host: "internal.svc", env: { "HTTP_HOST" => "API.Example.TEST:3000" }))
 
@@ -328,20 +323,13 @@ RSpec.describe EndPointBlank::Commands::EndpointAuthorize do
       expect(authorize_calls.first[:body][:target_hostname]).to eq("internal.svc")
     end
 
-    # target_hostname is the portal's application-environment lookup key. A
-    # value matching no registered row is a hard 422, not a cache miss -- so
-    # an unusable Host must fall back to Basic and never mint or cache a
-    # Bearer token, even under a hostname ("api.example.test") that looks
-    # perfectly valid on its own.
-    it "authenticates with Basic and mints no token when the host is unusable" do
+    it "reports nil when the host is unusable" do
       described_class.authorize(request_double(
                                   host: "api.example.test",
                                   env: { "HTTP_HOST" => "api.example.test/../evil" }
                                 ))
 
       expect(authorize_calls.first[:body][:target_hostname]).to be_nil
-      expect(authorize_calls.first[:auth]).to start_with("Basic ")
-      expect(EndPointBlank::AccessTokens.instance.exists?).to be(false)
     end
   end
 end

@@ -47,7 +47,6 @@ module EndPointBlank
           # BaseUrl.hostname_from_rack_env. request.host would read
           # X-Forwarded-Host unconditionally.
           hostname = EndPointBlank::BaseUrl.hostname_from_rack_env(request.env)
-          auth = Authorization.header(hostname)
           body = {
             path: path,
             http_method: method,
@@ -58,17 +57,14 @@ module EndPointBlank
             source_ip: request.remote_ip,
             uuid: request.uuid
           }
-          response = Http.post(configuration.authorize_url, auth, body)
 
-          if response&.status == 401 && auth.to_s.start_with?("Bearer ")
-            # Hand back the token that was rejected rather than clearing
-            # whatever is held now: under load it may already have been replaced
-            # by another request that got here first, and dropping that one
-            # would send the whole wave to exchange again.
-            EndPointBlank::AccessTokens.instance.invalidate(auth.to_s.delete_prefix("Bearer "))
-            auth = Authorization.header(hostname)
-            response = Http.post(configuration.authorize_url, auth, body)
-          end
+          # Basic, not Bearer. This call is to intake, which already holds
+          # this service's credential -- minting a token to present it back
+          # was a hop that bought nothing. With no Bearer there is no stale
+          # token, so the 401 retry that used to live here is gone: a 401 now
+          # means the credential is wrong, which is worth surfacing rather
+          # than retrying.
+          response = Http.post(configuration.authorize_url, Authorization.header, body)
 
           return nil if response.nil?
           EndPointBlank.logger.info "Authentication response: #{response.status} - #{response.body}"
