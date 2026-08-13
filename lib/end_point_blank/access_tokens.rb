@@ -43,8 +43,8 @@ module EndPointBlank
       @entries = {}
     end
 
-    def self.token(arg)
-      instance.token(arg)
+    def self.token(base_url)
+      instance.token(base_url)
     end
 
     # Retrieve a token covering base_url, generating one if no usable entry
@@ -97,7 +97,7 @@ module EndPointBlank
     # Discard every held token
     # @return [nil]
     def clear
-      @mutex.synchronize { @entries = {} }
+      @mutex.synchronize { @entries = {}.freeze }
     end
 
     # Discard the held token, but only if it is still the one the caller had
