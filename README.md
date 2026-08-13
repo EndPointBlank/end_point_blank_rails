@@ -150,15 +150,27 @@ export ENDPOINTBLANK_ENV=staging
 
 ### Authorization
 
-`EndPointBlank::Authorization.header(hostname = nil)` builds the outbound `Authorization` header
-used by the gem's own HTTP calls: a cached `Bearer` token for `hostname` when one is available
-(via `EndPointBlank::AccessTokens`), otherwise `Basic` credentials built from `client_id` /
-`client_secret`.
+`EndPointBlank::Authorization.header(base_url = nil)` builds the outbound `Authorization` header
+used by the gem's own HTTP calls: a cached `Bearer` token covering `base_url` when one is
+available (via `EndPointBlank::AccessTokens`), otherwise `Basic` credentials built from
+`client_id` / `client_secret` -- which covers both giving no target and a token that could not
+be obtained.
 
 ```ruby
-EndPointBlank::Authorization.header               # => "Basic ..."
-EndPointBlank::Authorization.header("api.example.com") # => "Bearer ..." if a token is cached
+EndPointBlank::Authorization.header # => "Basic ..."
+
+# Pass the URL you are about to call, NOT a hostname.
+# Strip any query string or fragment first -- intake rejects both.
+EndPointBlank::Authorization.header("https://api.example.com/orders") # => "Bearer ..." if a token is cached
 ```
+
+The argument is the URL you are about to call. intake matches it against registered base URLs by
+longest path prefix, so you need not know how the target registered itself -- `header` for
+`https://api.example.com/orders/42` reuses a token already cached for
+`https://api.example.com/orders`. `EndPointBlank::AccessTokens` caches one token per base URL
+intake resolves to, not one per process, so a service that calls several targets holds a token
+for each. A URL that does not match character-for-character (a different case, a query string,
+an unregistered path) simply misses and mints a new token -- it never guesses.
 
 Under Rails, protect an inbound endpoint by including the `Authorized` concern in a controller —
 it calls `EndPointBlank::Commands::EndpointAuthorize.authorize(request)` before the action, and
@@ -173,16 +185,17 @@ end
 
 `EndPointBlank::Commands::EndpointAuthorize.authorize` sends the request's path, HTTP method,
 inbound `Authorization` header, app name, resolved endpoint version, and remote IP to
-`#{base_url}/api/authorize`, and caches a positive (201) result for `cache_ttl` seconds via
-`EndPointBlank::Commands::AuthenticationCache`.
+`#{base_url}/api/authorize`, authenticating itself to intake with `Basic`, and caches a positive
+(201) result for `cache_ttl` seconds via `EndPointBlank::Commands::AuthenticationCache`. It never
+mints or presents a Bearer token for this call: intake already holds this service's own
+credential, so exchanging one to present it back would buy nothing.
 
-**Behavior change:** `target_hostname` on the authorize call, and the access-token cache key
-derived from it, now come from the `Host` header only. They previously came from
-`request.host`, which reads the last `X-Forwarded-Host` hop. If your app sits behind a proxy
-that **rewrites** `Host` (nginx's default; Caddy and most ALBs preserve it) and you registered
-the external hostname in the portal, either update the registered hostname to the internal one
-the app now reports, or configure the proxy to preserve `Host`. Deployments where `Host` and
-`X-Forwarded-Host` agree are unaffected.
+**Behavior change:** `target_hostname` on the authorize call now comes from the `Host` header
+only. It previously came from `request.host`, which reads the last `X-Forwarded-Host` hop. If
+your app sits behind a proxy that **rewrites** `Host` (nginx's default; Caddy and most ALBs
+preserve it) and you registered the external hostname in the portal, either update the
+registered hostname to the internal one the app now reports, or configure the proxy to preserve
+`Host`. Deployments where `Host` and `X-Forwarded-Host` agree are unaffected.
 
 ### Error reporting
 

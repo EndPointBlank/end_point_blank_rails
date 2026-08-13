@@ -5,7 +5,7 @@ require "spec_helper"
 RSpec.describe EndPointBlank::Authorization do
   let(:configuration) { EndPointBlank::Configuration.instance }
   let(:logger) { double("logger", info: nil, error: nil, warn: nil) }
-  let(:hostname) { "authorization-spec.example.test" }
+  let(:base_url) { "https://authorization-spec.example.test/orders" }
 
   around do |example|
     original = %i[@client_id @client_secret].each_with_object({}) do |ivar, memo|
@@ -26,16 +26,18 @@ RSpec.describe EndPointBlank::Authorization do
   end
 
   describe ".header" do
-    it "uses the client credentials when no hostname is given" do
+    it "uses the client credentials when no base_url is given" do
       expect(described_class.header).to eq("Basic #{Base64.strict_encode64("cid:csecret")}")
     end
 
-    it "uses a per-hostname access token when one can be obtained" do
+    it "uses a token covering base_url when one can be obtained" do
       allow(Excon).to receive(:post).and_return(
-        double("response", status: 200, body: JSON.generate(token: "abc", expired_at: (Time.now + 3600).utc.iso8601))
+        double("response", status: 200,
+                           body: JSON.generate(token: "abc", expired_at: (Time.now + 3600).utc.iso8601,
+                                               base_url: base_url))
       )
 
-      expect(described_class.header(hostname)).to eq("Bearer abc")
+      expect(described_class.header(base_url)).to eq("Bearer abc")
     end
 
     # Telemetry and authorization must keep working while the token endpoint is
@@ -43,7 +45,19 @@ RSpec.describe EndPointBlank::Authorization do
     it "falls back to the client credentials when no token can be obtained" do
       allow(Excon).to receive(:post).and_raise(Excon::Error::Timeout.new("timed out"))
 
-      expect(described_class.header(hostname)).to start_with("Basic ")
+      expect(described_class.header(base_url)).to start_with("Basic ")
+    end
+
+    # base_url is NOT NULL and intake 422s rather than minting when a URL
+    # resolves to no environment, so a response carrying a token but no
+    # base_url is a broken server, not a normal miss -- and it must not raise
+    # into the caller's Authorization header either.
+    it "falls back to the client credentials when the response omits base_url" do
+      allow(Excon).to receive(:post).and_return(
+        double("response", status: 200, body: JSON.generate(token: "abc", expired_at: (Time.now + 3600).utc.iso8601))
+      )
+
+      expect(described_class.header(base_url)).to start_with("Basic ")
     end
 
     it "never emits a newline, which would truncate or corrupt the header" do
