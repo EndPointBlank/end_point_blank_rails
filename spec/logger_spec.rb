@@ -78,3 +78,36 @@ RSpec.describe EndPointBlank::Loggers::Logger do
     expect(spy_logger).to have_received(:fatal).with("bad")
   end
 end
+
+RSpec.describe "EndPointBlank.logger default stream" do
+  include_context "resets EndPointBlank logger state"
+
+  # This library runs inside someone else's process. Anything it writes to
+  # stdout lands in the host application's own output, which corrupts any
+  # program whose stdout carries structured data. The default logger used to
+  # write there; it must not.
+  #
+  # Found by the SDK conformance drivers, which emit one JSON object on stdout
+  # and were being corrupted by the SDK's own diagnostics.
+  it "writes to stderr, never to stdout" do
+    EndPointBlank::Configuration.instance.logger = nil
+
+    out = StringIO.new
+    err = StringIO.new
+    original_out = $stdout
+    original_err = $stderr
+
+    begin
+      $stdout = out
+      $stderr = err
+      EndPointBlank.logger.info("a diagnostic line")
+    ensure
+      $stdout = original_out
+      $stderr = original_err
+    end
+
+    expect(out.string).to be_empty
+    expect(err.string).to include("a diagnostic line")
+  end
+end
+
