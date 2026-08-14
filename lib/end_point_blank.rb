@@ -49,8 +49,16 @@ module EndPointBlank
     yield Configuration.instance
   end
 
+  # Defaults to stderr, not stdout. This logger belongs to a library running
+  # inside someone else's process: anything it writes to stdout lands in the
+  # host application's own output. That corrupts any program whose stdout
+  # carries structured data -- a CLI emitting JSON, a worker writing a protocol
+  # stream -- and the host has no way to tell the two apart.
+  #
+  # Diagnostics belong on stderr for exactly this reason. Set
+  # `EndPointBlank.logger=` to override.
   def self.logger
-    Configuration.instance.logger || (@default_logger ||= ::Logger.new($stdout, level: ::Logger::INFO))
+    Configuration.instance.logger || (@default_logger ||= ::Logger.new($stderr, level: ::Logger::INFO))
   end
 
   def self.logger=(logger)
