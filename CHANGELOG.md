@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.1
+
+### Fixed
+
+- **Diagnostics now go to stderr, not stdout.** `EndPointBlank.logger` defaulted
+  to `Logger.new($stdout)`. This gem runs inside your process, so everything it
+  logged landed in your application's own output — which corrupts any program
+  whose stdout carries structured data, such as a CLI emitting JSON or a worker
+  writing a protocol stream, with no way for you to separate the two.
+
+  If you were relying on SDK log lines appearing on stdout, they now appear on
+  stderr. `EndPointBlank.logger=` still overrides, unchanged.
+
 ## 0.6.0
 
 ### Breaking
