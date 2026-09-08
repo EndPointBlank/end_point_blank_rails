@@ -75,7 +75,8 @@ module EndPointBlank
       end
 
       # 5xx, any other unexpected non-2xx, and a 2xx that carried nothing the
-      # cache could use (no token, or no base_url to key one under).
+      # cache could use (no token, or no base_url to key one under; an
+      # empty string is neither).
       def server_error?
         outcome == :server_error
       end
@@ -122,23 +123,24 @@ module EndPointBlank
         result = Commands::GenerateAccessToken.token_result(base_url)
         payload = result.payload
 
-        # The key is what intake resolved to, and only that. There is no
-        # fallback to the requested URL: that would key on the resource the
-        # caller happened to ask about, so a service walking /orders/1,
-        # /orders/2, /orders/3 would mint and store a token per resource, and
-        # nothing here evicts. Without a base URL the right application
-        # cannot be found, so no token is handed back either.
-        key = payload && payload[:base_url]
-
-        # `result.success?` is new: previously any response carrying a token
-        # and a base_url was cached, whatever status it arrived under. Only a
-        # 2xx mints a usable token, and a 4xx that happened to echo one back
-        # is a broken server, not a credential.
-        # success? already means "a 2xx carrying both a token and a base_url",
-        # so key and payload[:token] are guaranteed here rather than tested.
-        # A 2xx missing either is reported as a server error and falls to the
-        # branch below, exactly as a 500 would.
+        # What counts as a mint is decided once, in AccessTokenResult, next to
+        # the status it depends on -- so this layer and a caller reading the
+        # outcome can never disagree about whether a token exists. #success?
+        # already means "a 2xx carrying a usable token and the base_url to
+        # cache it under", so both are simply read below rather than tested
+        # again here; a 2xx missing either arrives already classified as a
+        # server error and takes the failure branch, exactly as a 500 does.
+        #
+        # Only a 2xx mints: a 4xx that happened to echo a token back is a
+        # broken server, not a credential, and is never cached.
         if result.success?
+          # The key is what intake resolved to, and only that. There is no
+          # fallback to the requested URL: that would key on the resource the
+          # caller happened to ask about, so a service walking /orders/1,
+          # /orders/2, /orders/3 would mint and store a token per resource,
+          # and nothing here evicts.
+          key = payload[:base_url]
+
           # The match that led here may have resolved under a different key
           # than the one intake just returned -- an environment's base URL
           # can change to a shorter path in the portal. Drop that stale key
@@ -338,14 +340,18 @@ module EndPointBlank
 
       # A 2xx is classified as a server error when it carried nothing usable,
       # so the outcome alone does not say which way it was useless. Say it
-      # here: this is the only place the distinction still exists.
+      # here: this is the only place the distinction still exists. The wording
+      # comes from the same predicate that refused to call the response a
+      # mint, so this line cannot claim a token the classification did not
+      # find -- an empty one included, which reads as a token to Ruby and to
+      # nobody else.
       if (200..299).cover?(result.status)
+        return "no token in response" unless Commands::AccessTokenResult.usable_string?(payload[:token])
+
         # Distinct from a rejected request: intake's base_url is NOT NULL, and
         # it answers 422 rather than minting when the caller's URL resolves to
         # no environment. A token with no base_url is a broken server.
-        return "response carried a token but no base_url" if payload[:token]
-
-        return "no token in response"
+        return "response carried a token but no base_url"
       end
 
       "HTTP #{result.status}"
