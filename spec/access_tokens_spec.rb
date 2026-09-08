@@ -462,6 +462,31 @@ RSpec.describe "EndPointBlank::AccessTokens against the token endpoint" do
       expect(logger).to have_received(:error).with(/client credentials revoked/)
     end
 
+    # Nothing usable came back, so nothing may be cached: an empty token would
+    # be sent as a bearer credential, and an empty base_url is a key no lookup
+    # can match, so every later call would mint again and lose it again.
+    it "returns nil and caches nothing when a 2xx carries an empty token" do
+      allow(Excon).to receive(:post).and_return(
+        double("response", status: 200, body: JSON.generate(token: "", base_url: base_url))
+      )
+
+      result = nil
+      expect { result = instance.token(base_url) }.not_to raise_error
+
+      expect(result).to be_nil
+      expect(instance.exists?(base_url)).to be(false)
+    end
+
+    it "returns nil and caches nothing when a 2xx carries an empty base_url" do
+      allow(Excon).to receive(:post).and_return(
+        double("response", status: 200, body: JSON.generate(token: "tok-1", base_url: ""))
+      )
+
+      expect(instance.token(base_url)).to be_nil
+      expect(instance.exists?(base_url)).to be(false)
+      expect(instance.exists?("")).to be(false)
+    end
+
     it "returns nil and says so when the intake could not be reached at all" do
       allow(Excon).to receive(:post).and_raise(Excon::Error::Timeout.new("timed out"))
 
@@ -787,6 +812,46 @@ RSpec.describe "EndPointBlank::AccessTokens against the token endpoint" do
         expect(failure).not_to be_nil
         expect(failure.reason).to eq("no token in response")
         expect(failure).not_to be_credential_rejected
+      end
+
+      # "" is truthy in Ruby, and a token cached under an empty base URL could
+      # be found by no lookup that ever runs. Both are failed mints, and the
+      # reason has to say which half was missing rather than going by
+      # truthiness and getting it exactly backwards.
+      it "records a 2xx with an empty token as a mint that produced no token" do
+        stub_status(200, JSON.generate(token: "", base_url: base_url))
+        instance.token(base_url)
+
+        failure = instance.last_failure(base_url)
+
+        expect(failure).to be_server_error
+        expect(failure.status).to eq(200)
+        expect(failure.reason).to eq("no token in response")
+      end
+
+      it "records a 2xx with an empty base_url as a token with nowhere to cache it" do
+        stub_status(200, JSON.generate(token: "tok-1", base_url: ""))
+        instance.token(base_url)
+
+        failure = instance.last_failure(base_url)
+
+        expect(failure).to be_server_error
+        expect(failure.status).to eq(200)
+        expect(failure.reason).to include("carried a token but no base_url")
+      end
+
+      # A 2xx apologising in an error document is a broken server, not the
+      # rejected request the same document would describe under a 4xx.
+      it "records a 2xx carrying an error where a token should be as a server error" do
+        stub_status(200, JSON.generate(error: "mint failed"))
+        instance.token(base_url)
+
+        failure = instance.last_failure(base_url)
+
+        expect(failure).to be_server_error
+        expect(failure).not_to be_request_rejected
+        expect(failure.status).to eq(200)
+        expect(failure.reason).to include("mint failed")
       end
 
       it "records a 2xx whose body cannot be read as a server error" do

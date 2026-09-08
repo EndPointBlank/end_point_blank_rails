@@ -33,11 +33,18 @@
   EndPointBlank::AccessTokens.last_failure("https://api.example.com/orders").status # => 401
   ```
 
-  The five outcomes are `:success` (a 2xx carrying both a token and a
-  `base_url`), `:credential_rejected` (401), `:request_rejected` (any other
-  4xx), `:server_error` (5xx, any other unexpected non-2xx, and a 2xx that
-  carried nothing usable) and `:transport_error` (no usable HTTP status was
-  obtained at all).
+  The five outcomes are `:success` (a token really was minted: a 2xx whose
+  body parsed and carries a non-empty `token` and the non-empty `base_url` to
+  cache it under), `:credential_rejected` (401), `:request_rejected` (any
+  other 4xx), `:server_error` (5xx, any other unexpected non-2xx, and a 2xx
+  that carried nothing usable) and `:transport_error` (no usable HTTP status
+  was obtained at all).
+
+  `#success?` is worth reading precisely: it is true only when there is a
+  token on the payload to read, so a caller that branches on it never has to
+  check for one again. A success predicate that can be true while the token is
+  absent makes every caller re-check the payload by hand, and that is the
+  check that gets forgotten.
 
   There is deliberately **no** `#retriable?` or equivalent retry/no-retry
   boolean. intake answers `400` for an invalid `token_ttl` or a missing
@@ -64,8 +71,20 @@
   `:server_error` with its real 2xx status attached; the specific reason
   ("no token in response", "response carried a token but no base_url") still
   appears in the log line, exactly as before.
+- An **empty** `token` or `base_url` counts as a missing one. `""` is truthy
+  in Ruby, so a plain presence check called such a response a success and
+  handed the caller an empty bearer token to send, or cached a token under a
+  key no lookup could ever match. Both are now `:server_error` with the real
+  2xx status, and the value must be a non-empty String — an array or an object
+  where a token belongs is a broken server too.
+- The parsed body is still attached to the result when an unusable 2xx is
+  classified `:server_error`, so `Commands::GenerateAccessToken.token` — the
+  published payload-or-`nil` accessor — hands back exactly the body it always
+  did for such a response.
 - A response body that will not parse is logged as an error rather than
-  silently becoming `nil`, and is reported as a transport error.
+  silently becoming `nil`. It is still classified by the status that carried
+  it, never as a transport error: unreadable under a 2xx is a `:server_error`,
+  unreadable under a 401 is still `:credential_rejected`.
 - `AccessTokens#clear` also drops the recorded failures.
 
 ### Compatibility

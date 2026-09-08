@@ -22,7 +22,11 @@ module EndPointBlank
     # result can be handed across threads, cached, or logged without anyone
     # being able to edit the verdict after the fact.
     AccessTokenResult = Data.define(:outcome, :status, :payload) do
-      # 2xx, carrying a payload there is actually a token to be had from.
+      # A token really was minted: a 2xx whose body parsed and carries both a
+      # non-empty token and the non-empty base_url to cache it under. Nothing
+      # else is a success, so a caller that branches on this can read the
+      # token straight off the payload without checking again that there is
+      # one -- and a check that is not there is a check nobody can forget.
       def success?
         outcome == :success
       end
@@ -40,7 +44,8 @@ module EndPointBlank
 
       # 5xx, any other unexpected non-2xx, and a 2xx that carried nothing
       # usable -- unreadable, or missing the token, or missing the base_url
-      # there is no way to cache a token without.
+      # there is no way to cache a token without. Empty counts as missing;
+      # see .usable_string?.
       def server_error?
         outcome == :server_error
       end
@@ -63,6 +68,31 @@ module EndPointBlank
       # writes it against the outcome it can see.
       def failure?
         !success?
+      end
+
+      # True when payload carries everything a mint needs: a token, and the
+      # base URL to cache it under.
+      #
+      # The single definition of what counts as a mint, and it sits here next
+      # to the outcomes rather than in the cache that consumes them, so a
+      # second layer cannot form its own opinion and end up disagreeing with
+      # the outcome it was handed. EndPointBlank::AccessTokens asks this
+      # instead of re-deriving it, and words its failure log line from the
+      # same predicate.
+      def self.minted?(payload)
+        payload.is_a?(Hash) && usable_string?(payload[:token]) && usable_string?(payload[:base_url])
+      end
+
+      # True when value is something there is actually anything to be had
+      # from.
+      #
+      # Spelled out rather than left to a bare `payload[:token] &&`, which is
+      # what this replaced: "" is truthy in Ruby, so an empty token sailed
+      # through as a success, and an empty base_url became a cache key no
+      # lookup could ever match. Neither is ever legitimate -- intake's token
+      # and base_url are both NOT NULL -- so either one means a broken server.
+      def self.usable_string?(value)
+        value.is_a?(String) && !value.empty?
       end
     end
 
@@ -165,24 +195,27 @@ module EndPointBlank
         # generated -- the credential really is rejected and the body really
         # is unparseable, at the same time.
         #
-        # The one case the body decides is a 2xx that carried nothing usable:
-        # unreadable, or missing the token, or missing the base_url there is
-        # no way to cache a token without. That is a broken server, and it is
-        # truthful to say so with the real 2xx status attached -- intake's
-        # base_url is NOT NULL and it answers 422 rather than minting when the
-        # URL resolves to nothing, so a 2xx without one cannot be anything
-        # else. The specific reason survives in the log line.
+        # The one thing the body decides, and only ever on a 2xx: whether a
+        # token was actually minted. A 2xx that is unreadable, or carries no
+        # token, or a token with no base_url to cache it under, is a broken
+        # server, and it is truthful to say so with the real 2xx status
+        # attached -- intake's base_url is NOT NULL and it answers 422 rather
+        # than minting when the URL resolves to nothing, so a 2xx without one
+        # cannot be anything else.
+        #
+        # Calling such a response a success instead would hand back a result
+        # whose #success? is true and whose token is absent, leaving every
+        # caller a re-check to remember -- which is exactly the check that
+        # gets forgotten. The payload rides along on the failure either way,
+        # so the specific reason survives for the log line and `token` still
+        # answers with precisely the body it always did.
         def outcome_for(status, payload)
           case status
-          when 200..299 then usable?(payload) ? :success : :server_error
+          when 200..299 then AccessTokenResult.minted?(payload) ? :success : :server_error
           when 401 then :credential_rejected
           when 400..499 then :request_rejected
           else :server_error # 5xx, and any 3xx, which Excon does not follow.
           end
-        end
-
-        def usable?(payload)
-          payload.is_a?(Hash) && payload[:token] && payload[:base_url] ? true : false
         end
       end
 

@@ -215,6 +215,13 @@ is still `:credential_rejected`: the SDK reaches intake through a proxy, and a W
 balancer can answer 401 with an HTML page intake never generated. `:transport_error` means one
 thing only — no usable HTTP status was obtained.
 
+The body decides exactly one thing, and only on a 2xx: whether a token was actually minted. A
+success means a token is there to read — the body parsed and carries a non-empty `token` and the
+non-empty `base_url` to cache it under. A 2xx that will not parse, or carries no token, or a
+token with no `base_url`, is a `:server_error` keeping its real 2xx status, because intake's
+`base_url` is `NOT NULL` and it answers a 4xx rather than minting when the URL resolves to
+nothing — so a 2xx missing one is a broken server, not a refused request.
+
 The same verdict is available one level down, without the cache, from
 `EndPointBlank::Commands::GenerateAccessToken.token_result(base_url)`, which returns an
 `AccessTokenResult` with `outcome`, `status`, `payload` and the same predicates.

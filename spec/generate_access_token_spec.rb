@@ -247,6 +247,61 @@ RSpec.describe EndPointBlank::Commands::GenerateAccessToken do
       result = described_class.token_result("https://example.com")
 
       expect(result).to be_server_error
+      expect(result).not_to be_success
+      expect(result.status).to eq(201)
+      expect(result.payload).to eq(token: "tok")
+    end
+
+    # intake sends an error document with a 4xx, never with a 2xx, so a 2xx
+    # carrying one is a server contradicting itself. It is still classified on
+    # the status it really sent rather than on what the body looks like it
+    # meant -- a 200 is not retroactively a 422 because it apologised.
+    it "reports a 2xx carrying an error where a token should be as a server error" do
+      stub_response(200, JSON.generate(error: "Missing target application"))
+
+      result = described_class.token_result("https://example.com")
+
+      expect(result).to be_server_error
+      expect(result).not_to be_success
+      expect(result).not_to be_request_rejected
+      expect(result.status).to eq(200)
+      expect(result.payload).to eq(error: "Missing target application")
+    end
+
+    # "" is truthy in Ruby, so the truthiness check this replaced called an
+    # empty token a mint and handed the caller an empty bearer token to send.
+    it "reports a 2xx with an empty token as a server error" do
+      stub_response(201, JSON.generate(token: "", base_url: "https://example.com"))
+
+      result = described_class.token_result("https://example.com")
+
+      expect(result).to be_server_error
+      expect(result).not_to be_success
+      expect(result.status).to eq(201)
+      expect(result.payload).to eq(token: "", base_url: "https://example.com")
+    end
+
+    # An empty base_url is not a key. A token cached under one can be matched
+    # by no lookup that ever runs, so it would be minted and lost again on
+    # every single call.
+    it "reports a 2xx with an empty base_url as a server error" do
+      stub_response(201, JSON.generate(token: "tok", base_url: ""))
+
+      result = described_class.token_result("https://example.com")
+
+      expect(result).to be_server_error
+      expect(result).not_to be_success
+      expect(result.status).to eq(201)
+      expect(result.payload).to eq(token: "tok", base_url: "")
+    end
+
+    it "reports a 2xx whose token is not a string at all as a server error" do
+      stub_response(201, JSON.generate(token: { value: "tok" }, base_url: "https://example.com"))
+
+      result = described_class.token_result("https://example.com")
+
+      expect(result).to be_server_error
+      expect(result).not_to be_success
       expect(result.status).to eq(201)
     end
 
@@ -298,6 +353,27 @@ RSpec.describe EndPointBlank::Commands::GenerateAccessToken do
       )
 
       expect(described_class.token("https://example.com")).to eq(error: "invalid credentials")
+    end
+
+    # The invariant that makes the tightened success predicate free of charge:
+    # reclassifying an unusable 2xx as a server error must not change what
+    # this hands back. It has always answered with the parsed body of whatever
+    # arrived, and a caller written against that still gets exactly that body.
+    it "still returns the symbolized body of a 2xx that carried no token" do
+      allow(Excon).to receive(:post).and_return(
+        double("response", status: 200, body: JSON.generate(base_url: "https://example.com", note: "none here"))
+      )
+
+      expect(described_class.token("https://example.com"))
+        .to eq(base_url: "https://example.com", note: "none here")
+    end
+
+    it "still returns the symbolized body of a 2xx whose token was empty" do
+      allow(Excon).to receive(:post).and_return(
+        double("response", status: 200, body: JSON.generate(token: "", base_url: "https://example.com"))
+      )
+
+      expect(described_class.token("https://example.com")).to eq(token: "", base_url: "https://example.com")
     end
 
     it "still returns nil when the body will not parse" do
