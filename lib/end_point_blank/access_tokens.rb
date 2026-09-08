@@ -38,14 +38,23 @@ module EndPointBlank
     # How long to hold a token whose expiry the intake sent unreadably.
     DEFAULT_LIFETIME = 3600
 
-    # How many distinct base URLs to remember a failure for. Nothing evicts a
-    # failure record on its own, and a service walking /orders/1, /orders/2,
-    # /orders/3 against a broken intake would otherwise accumulate one per
-    # resource URL forever -- the same unbounded leak the token cache is
-    # keyed to avoid. Hashes are insertion-ordered, so the oldest record goes
-    # when the map is full. A caller only ever asks about a URL it just
-    # called, so a bound this size is never the reason an answer is missing
-    # in practice.
+    # How many distinct base URLs to remember a failure for.
+    #
+    # DO NOT REMOVE THIS BOUND. A failure record is cleared only by a
+    # SUCCESSFUL mint, and the headline failure this whole class now
+    # distinguishes -- a revoked credential -- is precisely the case where a
+    # successful mint never comes. Every call fails, forever, so a service
+    # walking /orders/1, /orders/2, /orders/3 would record one entry per
+    # resource URL and clear none of them: an unbounded leak inside a gem
+    # embedded in someone else's long-lived process. It is the same trap the
+    # token cache avoids by keying on the environment intake resolves to
+    # rather than on the caller's URL (see the class comment), and the
+    # failure path must not reintroduce it.
+    #
+    # The cap is enforced on INSERT, not only on a successful mint, for the
+    # same reason. Hashes are insertion-ordered, so the oldest record is the
+    # one that goes. A caller only ever asks about a URL it just called, so
+    # a bound this size is never in practice the reason an answer is missing.
     MAX_FAILURES = 64
 
     # Why the last mint for a base URL did not produce a token.
@@ -169,9 +178,10 @@ module EndPointBlank
     # with a token String or nil, so an existing caller sees no difference;
     # one that wants to know whether to give up or try again asks here.
     #
-    # Keyed on the URL as it was passed to `token`, not on whatever intake
-    # resolved it to -- a failed mint often has no resolved base URL to speak
-    # of, and the caller has only the URL it asked with.
+    # Scope: one record per base URL, keyed on the URL as it was passed to
+    # `token` rather than on whatever intake resolved it to -- a failed mint
+    # often has no resolved base URL to speak of, and the caller has only the
+    # URL it asked with. The map is bounded; see MAX_FAILURES.
     #
     # Reads @failures exactly the way `match` reads @entries: one atomic read
     # of the ivar, no mutex, and every write inside the mutex REPLACES the
@@ -294,8 +304,11 @@ module EndPointBlank
       end
 
       failures = @failures.reject { |k, _| k == base_url }
-      # Bounded, oldest-first: see MAX_FAILURES. Hash#shift removes the
-      # oldest insertion, and this is a fresh copy nobody else can see yet.
+      # Bounded on insert, oldest evicted first -- see MAX_FAILURES for why
+      # this cannot be left to the clear-on-success path. Hash#shift removes
+      # the oldest insertion, and `failures` is a fresh copy no other thread
+      # can see yet, so mutating it here is safe; only the finished, frozen
+      # Hash is published to @failures.
       failures.shift while failures.size >= MAX_FAILURES
       @failures = failures.merge(
         base_url => Failure.new(base_url: base_url, outcome: result.outcome, status: result.status,
