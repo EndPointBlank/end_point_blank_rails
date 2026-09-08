@@ -87,12 +87,30 @@
   unreadable under a 401 is still `:credential_rejected`.
 - `AccessTokens#clear` also drops the recorded failures.
 
+### Changed
+
+- **`Commands::GenerateAccessToken.token` now returns `nil` unless a token was
+  actually minted.** It previously returned the symbol-keyed body of any status
+  it could read — an `error` document from a 401 or 422, or a 2xx that parsed
+  into something with no usable token in it. Each of those handed the caller a
+  truthy value for a request that produced no token, which is the failure
+  `token_result` was added to remove, one layer down.
+
+  This aligns all five SDKs with Elixir, whose equivalent has always answered
+  nil for anything that was not a mint.
+
+  **Upgrade note:** nothing in this gem calls `token` — `AccessTokens` reads
+  `token_result(base_url).payload` — so no log line or diagnostic changes. A
+  caller that read an error out of the return value should call `token_result`
+  instead: `.payload` is exactly what `token` used to hand back, now alongside
+  the outcome that explains it. A caller that only ever read `[:token]` needs
+  no change, because a body without a usable token was never something it
+  could act on.
+
 ### Compatibility
 
-- Nothing was removed or reshaped. `Commands::GenerateAccessToken.token`
-  still returns the symbol-keyed body for any status it could read — 401 and
-  422 included — and `nil` when it could not. `AccessTokens#token` still
-  returns a token String or `nil`, and `#exists?` still returns a Boolean.
+- `AccessTokens#token` still returns a token String or `nil`, and `#exists?`
+  still returns a Boolean.
 
 ## 0.6.1
 

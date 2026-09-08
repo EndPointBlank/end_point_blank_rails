@@ -134,16 +134,24 @@ module EndPointBlank
 
         # Mint an access token.
         #
-        # Kept exactly as it was, deliberately: this is published API. It
-        # answers with the parsed, symbolized body for ANY status it managed
-        # to read -- including a 401 or a 422 -- and nil when it could not
-        # read one at all. Callers that need to tell those apart want
-        # {token_result} instead.
+        # The body-or-nil accessor, where a body means a token was actually
+        # minted. Anything else answers nil: a 401 or 422 whose body explains
+        # the refusal, and a 2xx that parsed into something with no usable
+        # token in it.
+        #
+        # Returning those bodies would hand the caller a truthy value for a
+        # request that produced no token -- the failure {token_result} exists
+        # to remove, one layer down. Nothing is lost:
+        # `token_result(base_url).payload` is exactly what this used to
+        # return, now alongside the outcome that explains it.
         #
         # @param base_url [String] the URL a token is wanted for.
-        # @return [Hash, nil] symbol-keyed response body, or nil.
+        # @return [Hash, nil] symbol-keyed response body when a token was
+        #   minted, otherwise nil.
         def token(base_url)
-          token_result(base_url).payload
+          result = token_result(base_url)
+
+          result.success? ? result.payload : nil
         end
 
         private

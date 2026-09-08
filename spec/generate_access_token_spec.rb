@@ -335,45 +335,57 @@ RSpec.describe EndPointBlank::Commands::GenerateAccessToken do
     end
   end
 
-  # sc-189 backward compatibility. `token` is public API of a published gem
-  # (0.6.x), so it keeps its exact contract: the parsed, symbolized body for
-  # ANY status it managed to read, and nil when it could not read one.
+  # sc-189. `token` is the body-or-nil accessor, and a body means a token was
+  # actually minted -- matching Elixir, which has always answered nil for
+  # anything that was not a mint. Nothing in `lib` calls this: AccessTokens
+  # reads `token_result(base_url).payload`, so nil here costs no diagnostic.
   describe ".token legacy contract" do
-    it "still returns the symbolized body for a non-2xx response" do
+    it "answers nil for a non-2xx response rather than its error body" do
       allow(Excon).to receive(:post).and_return(
         double("response", status: 422, body: JSON.generate(error: "Missing target application"))
       )
 
-      expect(described_class.token("https://example.com")).to eq(error: "Missing target application")
+      expect(described_class.token("https://example.com")).to be_nil
     end
 
-    it "still returns the symbolized body for a 401" do
+    it "answers nil for a 401, leaving the reason to token_result" do
       allow(Excon).to receive(:post).and_return(
         double("response", status: 401, body: JSON.generate(error: "invalid credentials"))
       )
 
-      expect(described_class.token("https://example.com")).to eq(error: "invalid credentials")
+      expect(described_class.token("https://example.com")).to be_nil
+      expect(described_class.token_result("https://example.com").payload)
+        .to eq(error: "invalid credentials")
     end
 
-    # The invariant that makes the tightened success predicate free of charge:
-    # reclassifying an unusable 2xx as a server error must not change what
-    # this hands back. It has always answered with the parsed body of whatever
-    # arrived, and a caller written against that still gets exactly that body.
-    it "still returns the symbolized body of a 2xx that carried no token" do
+    # Handing these back would give a caller a truthy value for a request that
+    # produced no token -- the failure `token_result` exists to remove, one
+    # layer down. The body stays reachable on the result.
+    it "answers nil for a 2xx that carried no token" do
       allow(Excon).to receive(:post).and_return(
         double("response", status: 200, body: JSON.generate(base_url: "https://example.com", note: "none here"))
       )
 
-      expect(described_class.token("https://example.com"))
+      expect(described_class.token("https://example.com")).to be_nil
+      expect(described_class.token_result("https://example.com").payload)
         .to eq(base_url: "https://example.com", note: "none here")
     end
 
-    it "still returns the symbolized body of a 2xx whose token was empty" do
+    it "answers nil for a 2xx whose token was empty" do
       allow(Excon).to receive(:post).and_return(
         double("response", status: 200, body: JSON.generate(token: "", base_url: "https://example.com"))
       )
 
-      expect(described_class.token("https://example.com")).to eq(token: "", base_url: "https://example.com")
+      expect(described_class.token("https://example.com")).to be_nil
+    end
+
+    it "answers the symbolized body when a token really was minted" do
+      allow(Excon).to receive(:post).and_return(
+        double("response", status: 200, body: JSON.generate(token: "tok-1", base_url: "https://example.com"))
+      )
+
+      expect(described_class.token("https://example.com"))
+        .to eq(token: "tok-1", base_url: "https://example.com")
     end
 
     it "still returns nil when the body will not parse" do

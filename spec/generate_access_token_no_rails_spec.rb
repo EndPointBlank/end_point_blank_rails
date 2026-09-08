@@ -26,24 +26,26 @@ RSpec.describe "EndPointBlank::Commands::GenerateAccessToken without ActiveSuppo
 
   it "returns a symbol-keyed Hash from a JSON String response body, with no NoMethodError" do
     allow(Excon).to receive(:post).and_return(
-      double(status: 200, body: '{"token":"abc123","expired_at":"2099-01-01T00:00:00Z"}')
+      double(status: 200,
+             body: '{"token":"abc123","base_url":"host.example.com","expired_at":"2099-01-01T00:00:00Z"}')
     )
 
     result = nil
     expect { result = EndPointBlank::Commands::GenerateAccessToken.token("host.example.com") }.not_to raise_error
 
-    expect(result).to eq(token: "abc123", expired_at: "2099-01-01T00:00:00Z")
+    expect(result).to eq(token: "abc123", base_url: "host.example.com", expired_at: "2099-01-01T00:00:00Z")
   end
 
   it "returns a symbol-keyed Hash when the response body is already a Hash, with no NoMethodError" do
     allow(Excon).to receive(:post).and_return(
-      double(status: 200, body: { "token" => "def456", "expired_at" => "2099-01-01T00:00:00Z" })
+      double(status: 200, body: { "token" => "def456", "base_url" => "host.example.com",
+                                 "expired_at" => "2099-01-01T00:00:00Z" })
     )
 
     result = nil
     expect { result = EndPointBlank::Commands::GenerateAccessToken.token("host.example.com") }.not_to raise_error
 
-    expect(result).to eq(token: "def456", expired_at: "2099-01-01T00:00:00Z")
+    expect(result).to eq(token: "def456", base_url: "host.example.com", expired_at: "2099-01-01T00:00:00Z")
   end
 end
 # rubocop:enable Metrics/BlockLength
