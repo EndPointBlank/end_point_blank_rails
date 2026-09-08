@@ -38,13 +38,68 @@ module EndPointBlank
     # How long to hold a token whose expiry the intake sent unreadably.
     DEFAULT_LIFETIME = 3600
 
+    # How many distinct base URLs to remember a failure for.
+    #
+    # DO NOT REMOVE THIS BOUND. A failure record is cleared only by a
+    # SUCCESSFUL mint, and the headline failure this whole class now
+    # distinguishes -- a revoked credential -- is precisely the case where a
+    # successful mint never comes. Every call fails, forever, so a service
+    # walking /orders/1, /orders/2, /orders/3 would record one entry per
+    # resource URL and clear none of them: an unbounded leak inside a gem
+    # embedded in someone else's long-lived process. It is the same trap the
+    # token cache avoids by keying on the environment intake resolves to
+    # rather than on the caller's URL (see the class comment), and the
+    # failure path must not reintroduce it.
+    #
+    # The cap is enforced on INSERT, not only on a successful mint, for the
+    # same reason. Hashes are insertion-ordered, so the oldest record is the
+    # one that goes. A caller only ever asks about a URL it just called, so
+    # a bound this size is never in practice the reason an answer is missing.
+    MAX_FAILURES = 64
+
+    # Why the last mint for a base URL did not produce a token.
+    #
+    # Immutable and frozen (a Data), so it can be published straight out of
+    # {AccessTokens#last_failure} without a copy and without any chance of a
+    # caller editing the record the cache is holding.
+    Failure = Data.define(:base_url, :outcome, :status, :reason, :at) do
+      # 401. Permanent until the API credential itself is re-issued.
+      def credential_rejected?
+        outcome == :credential_rejected
+      end
+
+      # Any other 4xx -- intake's 400 and 422. Permanent, but the credential
+      # is fine: the request or the environment registration is not.
+      def request_rejected?
+        outcome == :request_rejected
+      end
+
+      # 5xx, any other unexpected non-2xx, and a 2xx that carried nothing the
+      # cache could use (no token, or no base_url to key one under).
+      def server_error?
+        outcome == :server_error
+      end
+
+      # No usable HTTP status was obtained at all: timeout, refused
+      # connection, DNS failure. Note what is NOT here -- a body that would
+      # not parse is classified by the status that carried it.
+      def transport_error?
+        outcome == :transport_error
+      end
+    end
+
     def initialize
       @mutex = Mutex.new
       @entries = {}
+      @failures = {}
     end
 
     def self.token(base_url)
       instance.token(base_url)
+    end
+
+    def self.last_failure(base_url)
+      instance.last_failure(base_url)
     end
 
     # Retrieve a token covering base_url, generating one if no usable entry
@@ -64,7 +119,8 @@ module EndPointBlank
         entry = match(base_url)
         return entry[:token] if usable?(entry)
 
-        payload = Commands::GenerateAccessToken.token(base_url)
+        result = Commands::GenerateAccessToken.token_result(base_url)
+        payload = result.payload
 
         # The key is what intake resolved to, and only that. There is no
         # fallback to the requested URL: that would key on the resource the
@@ -74,7 +130,15 @@ module EndPointBlank
         # cannot be found, so no token is handed back either.
         key = payload && payload[:base_url]
 
-        if payload && payload[:token] && key
+        # `result.success?` is new: previously any response carrying a token
+        # and a base_url was cached, whatever status it arrived under. Only a
+        # 2xx mints a usable token, and a 4xx that happened to echo one back
+        # is a broken server, not a credential.
+        # success? already means "a 2xx carrying both a token and a base_url",
+        # so key and payload[:token] are guaranteed here rather than tested.
+        # A 2xx missing either is reported as a server error and falls to the
+        # branch below, exactly as a 500 would.
+        if result.success?
           # The match that led here may have resolved under a different key
           # than the one intake just returned -- an environment's base URL
           # can change to a shorter path in the portal. Drop that stale key
@@ -90,6 +154,7 @@ module EndPointBlank
           )
           new_entries = new_entries.reject { |k, _| k == stale } if stale && stale != key
           @entries = new_entries.freeze
+          clear_failure(base_url, key)
           payload[:token]
         else
           # A failed refresh must not leave an expiring token behind claiming
@@ -100,16 +165,51 @@ module EndPointBlank
           stale = match_key(base_url, @entries)
           @entries = @entries.reject { |k, _| k == stale }.freeze if stale
 
-          EndPointBlank.logger.error "Failed to generate access token for #{base_url}: #{failure_reason(payload)}"
+          record_failure(base_url, result)
           nil
         end
       end
     end
 
-    # Discard every held token
+    # Why the last attempt to mint a token for base_url failed, or nil if the
+    # last attempt succeeded -- or if there has never been one.
+    #
+    # Additive: nothing else changed shape for this. `token` still answers
+    # with a token String or nil, so an existing caller sees no difference;
+    # one that wants to know whether to give up or try again asks here.
+    #
+    # Scope: one record per base URL, keyed on the URL as it was passed to
+    # `token` rather than on whatever intake resolved it to -- a failed mint
+    # often has no resolved base URL to speak of, and the caller has only the
+    # URL it asked with. The map is bounded; see MAX_FAILURES.
+    #
+    # Reads @failures exactly the way `match` reads @entries: one atomic read
+    # of the ivar, no mutex, and every write inside the mutex REPLACES the
+    # Hash rather than mutating it. A reader therefore iterates (or here,
+    # indexes) a snapshot nobody can change underneath it, and can never see
+    # a half-built map. Being a frozen Data, the Failure handed back needs no
+    # defensive copy.
+    #
+    # @param base_url [String] the URL that was asked about
+    # @return [Failure, nil]
+    def last_failure(base_url)
+      @failures[base_url]
+    end
+
+    # How many failure records are held. Exposed so the MAX_FAILURES bound is
+    # testable without reaching into the ivars.
+    # @return [Integer]
+    def failure_count
+      @failures.size
+    end
+
+    # Discard every held token, and every record of why one could not be held
     # @return [nil]
     def clear
-      @mutex.synchronize { @entries = {}.freeze }
+      @mutex.synchronize do
+        @entries = {}.freeze
+        @failures = {}.freeze
+      end
     end
 
     # Discard the held token, but only if it is still the one the caller had
@@ -184,19 +284,71 @@ module EndPointBlank
       !entry.nil? && entry[:expired_at] > Time.now + REFRESH_WINDOW
     end
 
-    # Why a mint produced no usable token, for the log.
-    def failure_reason(payload)
-      return "no response" unless payload.is_a?(Hash)
-      return payload[:error] if payload[:error]
+    # Log the failure and remember it. Runs inside the mutex.
+    #
+    # The 401 gets its own line, and it is loud: it is the one failure that
+    # will not clear on its own, and the one whose remedy is a human action.
+    # Folding it into the generic line -- which is what happened before -- let
+    # a revoked credential scroll past looking exactly like a blip.
+    def record_failure(base_url, result)
+      reason = failure_reason(result)
 
-      if payload[:token]
+      if result.credential_rejected?
+        EndPointBlank.logger.error(
+          "ACCESS TOKEN CREDENTIAL REJECTED for #{base_url}: intake answered 401 (#{reason}). " \
+          "This will not recover by retrying -- re-issue the API credential and update " \
+          "client_id/client_secret."
+        )
+      else
+        EndPointBlank.logger.error "Failed to generate access token for #{base_url}: #{reason}"
+      end
+
+      failures = @failures.reject { |k, _| k == base_url }
+      # Bounded on insert, oldest evicted first -- see MAX_FAILURES for why
+      # this cannot be left to the clear-on-success path. Hash#shift removes
+      # the oldest insertion, and `failures` is a fresh copy no other thread
+      # can see yet, so mutating it here is safe; only the finished, frozen
+      # Hash is published to @failures.
+      failures.shift while failures.size >= MAX_FAILURES
+      @failures = failures.merge(
+        base_url => Failure.new(base_url: base_url, outcome: result.outcome, status: result.status,
+                                reason: reason, at: Time.now)
+      ).freeze
+    end
+
+    # A success wipes the record, so `last_failure` never reports a problem
+    # that has already resolved itself. Both keys go: the URL the caller
+    # asked with, and the canonical one intake resolved it to, which a later
+    # call may well ask about instead. Runs inside the mutex, and replaces
+    # rather than mutates, like every other write here.
+    def clear_failure(base_url, key)
+      return if @failures.empty?
+
+      @failures = @failures.reject { |k, _| k == base_url || k == key }.freeze
+    end
+
+    # Why a mint produced no usable token, in words, for the log and for
+    # {Failure#reason}.
+    def failure_reason(result)
+      payload = result.payload
+
+      return "no response" if result.transport_error?
+      return payload[:error] if payload.is_a?(Hash) && payload[:error]
+      return "unreadable response body (HTTP #{result.status})" if payload.nil?
+
+      # A 2xx is classified as a server error when it carried nothing usable,
+      # so the outcome alone does not say which way it was useless. Say it
+      # here: this is the only place the distinction still exists.
+      if (200..299).cover?(result.status)
         # Distinct from a rejected request: intake's base_url is NOT NULL, and
         # it answers 422 rather than minting when the caller's URL resolves to
         # no environment. A token with no base_url is a broken server.
-        return "response carried a token but no base_url"
+        return "response carried a token but no base_url" if payload[:token]
+
+        return "no token in response"
       end
 
-      "no token in response"
+      "HTTP #{result.status}"
     end
 
     # Time.parse raises on anything it cannot read — an ArgumentError for a

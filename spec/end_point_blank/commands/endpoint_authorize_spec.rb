@@ -233,10 +233,12 @@ RSpec.describe EndPointBlank::Commands::EndpointAuthorize do
     # endpoint_authorize that could produce one.
     it "never requests an access token" do
       allow(EndPointBlank::Commands::GenerateAccessToken).to receive(:token)
+      allow(EndPointBlank::Commands::GenerateAccessToken).to receive(:token_result)
 
       described_class.authorize(request_double)
 
       expect(EndPointBlank::Commands::GenerateAccessToken).not_to have_received(:token)
+      expect(EndPointBlank::Commands::GenerateAccessToken).not_to have_received(:token_result)
     end
 
     # A Basic credential cannot have gone stale, so there is nothing for a

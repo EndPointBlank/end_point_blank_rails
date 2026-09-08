@@ -17,9 +17,13 @@ RSpec.describe EndPointBlank::AccessTokens do
 
   # Seeds through the public path rather than the ivars, so these keep meaning
   # something if the cache is reshaped again.
+  def minted(**payload)
+    EndPointBlank::Commands::AccessTokenResult.new(outcome: :success, status: 201, payload: payload)
+  end
+
   def cache_token_expiring_in(seconds)
-    allow(EndPointBlank::Commands::GenerateAccessToken).to receive(:token)
-      .and_return(token: "cached-token", expired_at: (Time.now + seconds).iso8601, base_url: base_url)
+    allow(EndPointBlank::Commands::GenerateAccessToken).to receive(:token_result)
+      .and_return(minted(token: "cached-token", expired_at: (Time.now + seconds).iso8601, base_url: base_url))
     instance.token(base_url)
   end
 
@@ -31,14 +35,14 @@ RSpec.describe EndPointBlank::AccessTokens do
     cache_token_expiring_in(5 * 60)
 
     expect(instance.token(base_url)).to eq("cached-token")
-    expect(EndPointBlank::Commands::GenerateAccessToken).to have_received(:token).once
+    expect(EndPointBlank::Commands::GenerateAccessToken).to have_received(:token_result).once
   end
 
   it "treats a token expiring 1 minute out as expired and fetches a fresh token" do
     cache_token_expiring_in(60)
 
-    allow(EndPointBlank::Commands::GenerateAccessToken).to receive(:token)
-      .and_return(token: "fresh-token", expired_at: (Time.now + 3600).iso8601, base_url: base_url)
+    allow(EndPointBlank::Commands::GenerateAccessToken).to receive(:token_result)
+      .and_return(minted(token: "fresh-token", expired_at: (Time.now + 3600).iso8601, base_url: base_url))
 
     expect(instance.token(base_url)).to eq("fresh-token")
   end
@@ -49,9 +53,9 @@ RSpec.describe EndPointBlank::AccessTokens do
   # failed` in plain Ruby (no ActiveSupport patches this), which would have
   # crashed the *very next* cache-hit lookup.
   it "serves a second cache-hit lookup from a freshly-fetched token without raising" do
-    allow(EndPointBlank::Commands::GenerateAccessToken).to receive(:token)
+    allow(EndPointBlank::Commands::GenerateAccessToken).to receive(:token_result)
       .with(base_url)
-      .and_return(token: "fresh-token", expired_at: (Time.now + 3600).iso8601, base_url: base_url)
+      .and_return(minted(token: "fresh-token", expired_at: (Time.now + 3600).iso8601, base_url: base_url))
 
     first = instance.token(base_url)
 
@@ -60,7 +64,7 @@ RSpec.describe EndPointBlank::AccessTokens do
 
     expect(first).to eq("fresh-token")
     expect(second).to eq("fresh-token")
-    expect(EndPointBlank::Commands::GenerateAccessToken).to have_received(:token).once
+    expect(EndPointBlank::Commands::GenerateAccessToken).to have_received(:token_result).once
   end
 end
 # rubocop:enable Metrics/BlockLength
@@ -202,10 +206,15 @@ RSpec.describe "EndPointBlank::AccessTokens against the token endpoint" do
     end
   end
 
+  # The 422 here is just "intake refused this mint" -- in intake a 422 means
+  # the target or source application could not be resolved, NOT that the
+  # credential is bad (that is a 401, exercised separately below). Any refusal
+  # would do; what is being pinned is that a refusal for one URL cannot
+  # disturb a live token held for another.
   it "serves a live token without asking, so a refused base URL cannot disturb it" do
     instance.token(base_url)
     allow(Excon).to receive(:post).and_return(
-      double("response", status: 422, body: JSON.generate(error: "revoked"))
+      double("response", status: 422, body: JSON.generate(error: "Missing target application"))
     )
 
     expect(instance.token("#{base_url}/42")).to eq("tok-1")
@@ -217,6 +226,10 @@ RSpec.describe "EndPointBlank::AccessTokens against the token endpoint" do
     # one left behind is always close to death. Keeping it means exists? --
     # whose floor is 30 seconds -- goes on calling it usable, and a caller
     # acting on that presents a credential the intake is about to reject.
+    #
+    # The 422 stands for "any refusal", not for a rejected credential: in
+    # intake a 422 is an unresolvable target/source application. Eviction is
+    # the same whatever the refusal was.
     allow(Excon).to receive(:post).and_return(
       double("response", status: 200,
                          body: JSON.generate(token: "nearly-dead", expired_at: (Time.now + 60).utc.iso8601,
@@ -225,7 +238,7 @@ RSpec.describe "EndPointBlank::AccessTokens against the token endpoint" do
     instance.token(base_url)
 
     allow(Excon).to receive(:post).and_return(
-      double("response", status: 422, body: JSON.generate(error: "revoked"))
+      double("response", status: 422, body: JSON.generate(error: "Missing target application"))
     )
 
     expect(instance.token(base_url)).to be_nil
@@ -233,7 +246,8 @@ RSpec.describe "EndPointBlank::AccessTokens against the token endpoint" do
   end
 
   # Only the entry covering the failed URL is dropped. Intake refusing one
-  # target must not cost the tokens held for every other target.
+  # target must not cost the tokens held for every other target. Again the
+  # 422 is a stand-in for any refusal, not for a bad credential.
   it "leaves other base URLs untouched when one fails to refresh" do
     other = "https://other.example.test"
     allow(Excon).to receive(:post) do |_url, options|
@@ -246,7 +260,7 @@ RSpec.describe "EndPointBlank::AccessTokens against the token endpoint" do
     instance.token(other)
 
     allow(Excon).to receive(:post).and_return(
-      double("response", status: 422, body: JSON.generate(error: "revoked"))
+      double("response", status: 422, body: JSON.generate(error: "Missing target application"))
     )
 
     expect(instance.token(base_url)).to be_nil
@@ -641,6 +655,243 @@ RSpec.describe "EndPointBlank::AccessTokens against the token endpoint" do
       [minter, *readers].each(&:join)
 
       expect(errors).to eq([])
+    end
+  end
+  # sc-189. intake now answers 401 for a rejected credential and something
+  # else for everything else, so the status carries a remedy: a 401 will not
+  # recover until the credential is re-issued, a 5xx or a timeout probably
+  # will. Before this, both arrived here as nil and left as the same generic
+  # "Failed to generate access token" line, so neither a human reading the log
+  # nor a caller reading the return value could tell them apart.
+  describe "distinguishing a rejected credential from a transient failure" do
+    def stub_status(status, body)
+      allow(Excon).to receive(:post).and_return(double("response", status: status, body: body))
+    end
+
+    it "logs a distinct, loud error naming the credential when intake answers 401" do
+      stub_status(401, JSON.generate(error: "invalid credentials"))
+
+      expect(instance.token(base_url)).to be_nil
+
+      expect(logger).to have_received(:error).with(/credential/i)
+      expect(logger).to have_received(:error).with(/re-issue/i)
+      # Emphatically NOT the generic line: that is the whole point.
+      expect(logger).not_to have_received(:error).with(/Failed to generate access token/)
+    end
+
+    it "still logs the generic failure line for a 500, which is not a credential problem" do
+      stub_status(500, JSON.generate(error: "boom"))
+
+      expect(instance.token(base_url)).to be_nil
+
+      expect(logger).to have_received(:error).with(/Failed to generate access token/)
+      expect(logger).not_to have_received(:error).with(/re-issue/i)
+    end
+
+    it "evicts the entry it could not replace on a 401, exactly as on any other failure" do
+      allow(Excon).to receive(:post).and_return(
+        double("response", status: 200,
+                           body: JSON.generate(token: "nearly-dead", expired_at: (Time.now + 60).utc.iso8601,
+                                               base_url: base_url))
+      )
+      instance.token(base_url)
+
+      stub_status(401, JSON.generate(error: "invalid credentials"))
+
+      expect(instance.token(base_url)).to be_nil
+      expect(instance.exists?(base_url)).to be(false)
+    end
+
+    describe "#last_failure" do
+      it "reports nothing before anything has failed" do
+        expect(instance.last_failure(base_url)).to be_nil
+      end
+
+      it "reports nothing after a successful mint" do
+        instance.token(base_url)
+
+        expect(instance.last_failure(base_url)).to be_nil
+      end
+
+      it "records a 401 as a rejected credential, with the status and the reason intake gave" do
+        stub_status(401, JSON.generate(error: "invalid credentials"))
+        instance.token(base_url)
+
+        failure = instance.last_failure(base_url)
+
+        expect(failure).not_to be_nil
+        expect(failure).to be_credential_rejected
+        expect(failure.status).to eq(401)
+        expect(failure.base_url).to eq(base_url)
+        expect(failure.reason).to include("invalid credentials")
+        expect(failure.at).to be_a(Time)
+      end
+
+      # intake's 400 (invalid token_ttl / missing base_url) and 422 (missing
+      # target or source application, failed mint) are permanent too. The
+      # remedy differs -- register the environment, or fix the request -- but
+      # retrying is just as futile, so they must not read as transient.
+      it "records a 422 as a rejected request that is permanent but not a credential problem" do
+        stub_status(422, JSON.generate(error: "Missing target application"))
+        instance.token(base_url)
+
+        failure = instance.last_failure(base_url)
+
+        expect(failure).to be_request_rejected
+        expect(failure).not_to be_credential_rejected
+        expect(failure.status).to eq(422)
+      end
+
+      it "records a 5xx as a server error" do
+        stub_status(503, JSON.generate(error: "unavailable"))
+        instance.token(base_url)
+
+        failure = instance.last_failure(base_url)
+
+        expect(failure).to be_server_error
+        expect(failure.status).to eq(503)
+      end
+
+      it "records a timeout as a transport error with no status" do
+        allow(Excon).to receive(:post).and_raise(Excon::Error::Timeout.new("timed out"))
+        instance.token(base_url)
+
+        failure = instance.last_failure(base_url)
+
+        expect(failure).to be_transport_error
+        expect(failure.status).to be_nil
+      end
+
+      # A 200 carrying a token but no base_url is a broken server, not a
+      # rejected credential -- the cache has nothing to key on, so the mint
+      # failed even though the exchange "succeeded".
+      it "records a success with no base_url as a failure a caller can see" do
+        stub_status(200, JSON.generate(token: "tok-1"))
+        instance.token(base_url)
+
+        failure = instance.last_failure(base_url)
+
+        expect(failure).not_to be_nil
+        expect(failure).not_to be_credential_rejected
+        expect(failure.reason).to include("carried a token but no base_url")
+      end
+
+      # A 2xx that carried neither a token nor an error is its own kind of
+      # broken: the exchange worked and produced nothing to use.
+      it "records an empty success body as a mint that produced no token" do
+        stub_status(200, JSON.generate(base_url: base_url))
+        instance.token(base_url)
+
+        failure = instance.last_failure(base_url)
+
+        expect(failure).not_to be_nil
+        expect(failure.reason).to eq("no token in response")
+        expect(failure).not_to be_credential_rejected
+      end
+
+      it "records a 2xx whose body cannot be read as a server error" do
+        stub_status(200, "<html>not json</html>")
+        instance.token(base_url)
+
+        failure = instance.last_failure(base_url)
+
+        expect(failure).to be_server_error
+        expect(failure.reason).to eq("unreadable response body (HTTP 200)")
+      end
+
+      # The proxy-401 case: a 401 whose body never came from intake at all.
+      # It must still read as a rejected credential.
+      it "records a 401 with an unreadable body as a rejected credential, not a transport error" do
+        stub_status(401, "<html><body><h1>401 Unauthorized</h1></body></html>")
+        instance.token(base_url)
+
+        failure = instance.last_failure(base_url)
+
+        expect(failure).to be_credential_rejected
+        expect(failure).not_to be_transport_error
+        expect(failure.status).to eq(401)
+        expect(logger).to have_received(:error).with(/re-issue/i)
+      end
+
+      it "exposes no retry/no-retry boolean on the failure record either" do
+        stub_status(401, JSON.generate(error: "invalid credentials"))
+        instance.token(base_url)
+
+        expect(instance.last_failure(base_url)).not_to respond_to(:retriable?)
+      end
+
+      it "clears the record once a mint succeeds again" do
+        stub_status(401, JSON.generate(error: "invalid credentials"))
+        instance.token(base_url)
+        expect(instance.last_failure(base_url)).not_to be_nil
+
+        allow(Excon).to receive(:post).and_return(
+          double("response", status: 201,
+                             body: JSON.generate(token: "recovered", expired_at: (Time.now + 3600).utc.iso8601,
+                                                 base_url: base_url))
+        )
+
+        expect(instance.token(base_url)).to eq("recovered")
+        expect(instance.last_failure(base_url)).to be_nil
+      end
+
+      it "keeps one record per base URL, so one target failing does not mask another" do
+        other = "https://other.example.test"
+        allow(Excon).to receive(:post) do |_url, options|
+          requested = JSON.parse(options[:body])["base_url"]
+          if requested == base_url
+            double("response", status: 401, body: JSON.generate(error: "invalid credentials"))
+          else
+            double("response", status: 503, body: JSON.generate(error: "unavailable"))
+          end
+        end
+
+        instance.token(base_url)
+        instance.token(other)
+
+        expect(instance.last_failure(base_url)).to be_credential_rejected
+        expect(instance.last_failure(other)).to be_server_error
+      end
+
+      it "answers nil for a base URL that has never been asked about" do
+        stub_status(401, JSON.generate(error: "invalid credentials"))
+        instance.token(base_url)
+
+        expect(instance.last_failure("https://never-asked.example.test")).to be_nil
+      end
+
+      it "is reachable at the singleton level, like token/exists?/invalidate" do
+        stub_status(401, JSON.generate(error: "invalid credentials"))
+        EndPointBlank::AccessTokens.token(base_url)
+
+        expect(EndPointBlank::AccessTokens.last_failure(base_url)).to be_credential_rejected
+      end
+
+      it "is dropped by clear, along with the tokens" do
+        stub_status(401, JSON.generate(error: "invalid credentials"))
+        instance.token(base_url)
+
+        instance.clear
+
+        expect(instance.last_failure(base_url)).to be_nil
+      end
+
+      # Nothing evicts a failure record on its own, and a service walking
+      # /orders/1, /orders/2, ... against a broken intake would otherwise
+      # grow one per resource URL forever -- the same unbounded-growth trap
+      # the token cache is keyed to avoid.
+      it "does not grow without bound when many distinct URLs fail" do
+        stub_status(503, JSON.generate(error: "unavailable"))
+
+        (EndPointBlank::AccessTokens::MAX_FAILURES + 20).times do |i|
+          instance.token("https://grow#{i}.example.test")
+        end
+
+        expect(instance.failure_count).to be <= EndPointBlank::AccessTokens::MAX_FAILURES
+        # The most recent one is always the one still there.
+        last = "https://grow#{EndPointBlank::AccessTokens::MAX_FAILURES + 19}.example.test"
+        expect(instance.last_failure(last)).to be_server_error
+      end
     end
   end
 end
