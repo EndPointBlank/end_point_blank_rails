@@ -172,6 +172,53 @@ intake resolves to, not one per process, so a service that calls several targets
 for each. A URL that does not match character-for-character (a different case, a query string,
 an unregistered path) simply misses and mints a new token -- it never guesses.
 
+### Why a token could not be minted
+
+`EndPointBlank::AccessTokens.token` answers with a token String or `nil`, which is all most
+callers need. When `nil` is not enough — when you want to know whether retrying could possibly
+help — ask what went wrong:
+
+```ruby
+url = "https://api.example.com/orders"
+
+if EndPointBlank::AccessTokens.token(url).nil?
+  failure = EndPointBlank::AccessTokens.last_failure(url)
+
+  case failure.outcome
+  when :credential_rejected
+    # intake answered 401. Permanent until the credential itself changes:
+    # re-issue it in the portal and update client_id / client_secret.
+    raise "EndPointBlank credential rejected (#{failure.reason})"
+  when :request_rejected
+    # A 400 or 422: intake could not resolve the target or source
+    # application, or the request itself was malformed. Retrying will not fix
+    # it, but the credential is fine.
+  when :server_error, :transport_error
+    # A 5xx, an unusable response, a timeout, a refused connection. Try again.
+  end
+end
+```
+
+`last_failure` returns `nil` once a mint for that URL succeeds again, so it never reports a
+problem that has already cleared. A `Failure` carries `base_url`, `outcome`, `status` (the HTTP
+status, or `nil` when no usable one was obtained), `reason`, and `at`, and answers
+`#credential_rejected?`, `#request_rejected?`, `#server_error?` and `#transport_error?`.
+
+There is deliberately no `#retriable?` or other single retry/no-retry boolean. Retrying a `400`
+or a `422` is exactly as futile as retrying a `401` — intake answers `400` for an invalid
+`token_ttl` or a missing `base_url`, and `422` when the target or source application cannot be
+resolved — so a boolean would have to answer for cases whose only honest answer is "it depends
+what you are going to do about it". Branch on the outcome instead.
+
+Classification is on the HTTP status first and the body second. A `401` whose body will not parse
+is still `:credential_rejected`: the SDK reaches intake through a proxy, and a WAF or load
+balancer can answer 401 with an HTML page intake never generated. `:transport_error` means one
+thing only — no usable HTTP status was obtained.
+
+The same verdict is available one level down, without the cache, from
+`EndPointBlank::Commands::GenerateAccessToken.token_result(base_url)`, which returns an
+`AccessTokenResult` with `outcome`, `status`, `payload` and the same predicates.
+
 Under Rails, protect an inbound endpoint by including the `Authorized` concern in a controller —
 it calls `EndPointBlank::Commands::EndpointAuthorize.authorize(request)` before the action, and
 raises `EndPointBlank::UnauthorizedError` (which you can rescue with
