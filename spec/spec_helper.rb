@@ -16,4 +16,5 @@ RSpec.configure do |config|
   end
 
   config.include FakeRails
+  config.include GuardedController
 end

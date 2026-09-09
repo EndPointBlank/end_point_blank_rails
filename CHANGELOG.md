@@ -1,5 +1,102 @@
 # Changelog
 
+## 0.8.0
+
+### Fixed
+
+- **`EndPointBlank::Rails::Authenticated` works.** It could not have worked
+  once: it called `EndPointBlank::Commands::EndpointAuthenticate`, a constant
+  this gem has never defined, so every action of every controller including the
+  concern raised `NameError` from its `before_action` — before authentication
+  could succeed or fail. It now calls
+  `EndPointBlank::Commands::BasicAuthenticate`, the command that was in the tree
+  the whole time and that the JS, Java and Python SDKs each document their own
+  authenticate command as a port of.
+
+  It was implemented rather than removed because four other SDKs expose an
+  authenticate path and three of them name this gem as the original. A missing
+  one in Ruby is a gap, not a decision. No public constant is removed:
+  `Commands::EndpointAuthenticate` never resolved, so nothing could have been
+  depending on it, and no `Commands::EndpointAuthenticate` is being introduced
+  either — that would have been a second command for a job this gem already had
+  a command for, with `BasicAuthenticate` left dead beside it.
+
+- **`Commands::BasicAuthenticate` works.** It built its `Authorization` header
+  from `AuthorizationGenerate.generate` — a second constant this gem has never
+  defined — so repairing only the concern's constant would have moved the same
+  `NameError` one frame deeper. It now uses `Authorization.header`, as
+  `EndpointAuthorize` and all three ports of this command do. Neither defect was
+  reachable by any test or any application, which is how both survived a
+  coverage pass: a file no spec requires and no application includes is
+  invisible to a coverage number.
+
+- **A nil answer from intake reaches the branch written for it.**
+  `authenticate!` parsed the response body on the line *above* its own
+  `if !result` guard, so a nil result died with `NoMethodError` on `nil.body`
+  and the nil branch could never run. Fixed in the same pass rather than left to
+  be uncovered by fixing the constant.
+
+- **A refusal from `Authenticated` now says which refusal it was.** The concern
+  used `raise UnauthorizedError, "message"` — the two-argument
+  `raise Class, message` form, which calls `Class.exception(message)` and can
+  pass nothing else, so it structurally could not carry intake's status however
+  willing `UnauthorizedError` was to accept one. Every refusal would therefore
+  have arrived as the class's 401 default, including the 403 that means
+  `access_denied`. `Authorized` has always passed intake's status through, so
+  the same denial gave a caller two different answers depending on which concern
+  the controller included.
+
+  401 and 403 send an integrator to two different places: *re-check the
+  credential* versus *ask for a grant covering this endpoint*. Collapsing them
+  sends half of them to debug the wrong thing.
+
+  | intake answered | `error.status` | what it tells the integrator |
+  | --- | --- | --- |
+  | 401 | `401` | the credential was not accepted — re-check or re-issue it |
+  | 403 | `403` | the credential is fine; no grant covers this endpoint |
+  | any other non-201 | that status | intake's own verdict, verbatim |
+  | nothing at all | `503` | the check could not be made; nothing judged this caller |
+
+  The README's own suggested handler — `status: e.status` — was written as
+  though this already worked, and on the `Authorized` path it did. It now works
+  on both.
+
+### Changed
+
+- **An intake 5xx now reaches a caller of an `Authenticated` controller as that
+  5xx**, where it would previously have reached them as a 401. An outage in
+  intake presents as an outage rather than as a rejected credential, so a client
+  branching on `401` to trigger a re-login will no longer do so for a fault that
+  has nothing to do with its credential. The same is true of an unreachable
+  intake, which is now a 503 — this is what `Authorized` has always answered for
+  that case, and what all four other SDKs answer.
+
+  In practice no deployment can have observed the old behaviour, because the
+  concern raised `NameError` before reaching any of it. It is called out anyway
+  because the other three SDKs called out exactly this change for exactly this
+  reason, and because anyone reading their changelogs should find the Ruby entry
+  saying the same thing.
+
+- The two concerns' refusal handling — two transcriptions of one decision, which
+  had drifted — is now one method,
+  `EndPointBlank::UnauthorizedError.refusal_from(result, action)`. Two copies is
+  how one path acquires a fix the other does not, which is precisely what
+  happened here. `Authorized` behaves exactly as before: its refusal path moved
+  into the shared method without changing the message or the status it produces
+  for any input, including the unreachable case, whose message has never carried
+  a `"Authorization failed:"` prefix and still does not.
+- `Rails::Authorized#authorize_error_message`, a private method, is gone; its
+  body is now the shared `refusal_from`.
+
+### Unchanged
+
+- `UnauthorizedError.new(message)` still means what it meant: the status
+  defaults to 401, and the status remains the optional second argument. The
+  class itself is otherwise untouched — it always accepted a status, which is
+  why nothing ever complained that `authenticate!` was not passing one.
+- `Authenticated` deliberately does **not** cache intake's answer, matching every
+  other SDK's authenticate command. `Authorized` caches as before.
+
 ## 0.7.0
 
 ### Added
