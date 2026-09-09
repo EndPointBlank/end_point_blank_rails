@@ -20,8 +20,10 @@ module EndPointBlank
     # because the authenticate path is not a Rails-only idea that Rails
     # happened not to need: the JS, Java and Python SDKs each expose one, and
     # each of their commands documents itself as "equivalent to the Ruby gem's
-    # `EndPointBlank::Commands::BasicAuthenticate`". Four SDKs were ported from
-    # a Ruby original that was here the whole time and simply never wired up. A
+    # `EndPointBlank::Commands::BasicAuthenticate`". Three SDKs were ported
+    # from a Ruby original that was here the whole time and simply never wired
+    # up. (Elixir has no authenticate path at all, so "four other SDKs expose
+    # one", as sc-306 puts it, is three -- but three of three name this gem.) A
     # missing authenticate path in Ruby is a gap, not a decision.
     #
     # == Why `BasicAuthenticate` and not a new `EndpointAuthenticate`

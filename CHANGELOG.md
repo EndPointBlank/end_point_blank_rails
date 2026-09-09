@@ -13,9 +13,10 @@
   the whole time and that the JS, Java and Python SDKs each document their own
   authenticate command as a port of.
 
-  It was implemented rather than removed because four other SDKs expose an
-  authenticate path and three of them name this gem as the original. A missing
-  one in Ruby is a gap, not a decision. No public constant is removed:
+  It was implemented rather than removed because three other SDKs expose an
+  authenticate path and all three name this gem as the original — Elixir has
+  none, so sc-306's "four other SDKs" is three, but it is three of three. A
+  missing one in Ruby is a gap, not a decision. No public constant is removed:
   `Commands::EndpointAuthenticate` never resolved, so nothing could have been
   depending on it, and no `Commands::EndpointAuthenticate` is being introduced
   either — that would have been a second command for a job this gem already had
