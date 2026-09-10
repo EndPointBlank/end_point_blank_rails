@@ -251,6 +251,32 @@ preserve it) and you registered the external hostname in the portal, either upda
 registered hostname to the internal one the app now reports, or configure the proxy to preserve
 `Host`. Deployments where `Host` and `X-Forwarded-Host` agree are unaffected.
 
+The `Authenticated` concern is the lighter sibling: it calls
+`EndPointBlank::Commands::BasicAuthenticate.authenticate(request)` before the action and refuses
+the same way, but records nothing on the Rack env, sets no deprecation headers and — matching
+every other SDK's authenticate path — does not cache intake's answer.
+
+```ruby
+class OrdersController < ApplicationController
+  include EndPointBlank::Rails::Authenticated
+end
+```
+
+`EndPointBlank::UnauthorizedError#status` is intake's own verdict, from either concern, so
+`rescue_from` can render it directly. 401 and 403 are different remedies and must not be
+collapsed:
+
+| intake answered | `error.status` |
+| --- | --- |
+| 401 | `401` — re-check or re-issue the credential |
+| 403 | `403` — ask for a grant covering this endpoint |
+| any other non-201 | that status, verbatim |
+| nothing at all | `503` — the check could not be made, so nothing judged this caller |
+
+`UnauthorizedError.new(message)` still defaults to 401; the status is an optional second
+argument. Raise the instance (`raise UnauthorizedError.new(msg, status)`) rather than
+`raise UnauthorizedError, msg` — the two-argument form cannot carry a status.
+
 ### Error reporting
 
 Exceptions raised while `EndPointBlank::Middleware::Rack::ReportInteraction` is on the stack are
@@ -344,6 +370,7 @@ end
 
 class OrdersController < ApplicationController
   include EndPointBlank::Rails::Authorized   # authorize inbound requests before each action
+  # or: include EndPointBlank::Rails::Authenticated  # authenticate only, no caching
   include EndPointBlank::Rails::Versioned
 
   version ["v1", "v2"], only: [:index]
