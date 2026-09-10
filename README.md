@@ -76,7 +76,7 @@ Every setting listed below can be set explicitly in that block, and most also fa
 | `app_name` | `ENDPOINTBLANK_APP_NAME` | `Rails.application.name.underscore` if Rails is defined, else `nil` | Identifies your app to EndPointBlank. |
 | `env_name` | `ENDPOINTBLANK_ENV` | `RACK_ENV`, then `APP_ENV`, then `Rails.env` if defined, else `"production"` (resolved per-request by `SessionConfiguration.env_name`, not read directly off `Configuration`) | The environment name reported with each request/response payload. |
 | `logger` | — | A `::Logger.new($stdout, level: ::Logger::INFO)`, or `Rails.logger` under Rails (set by the railtie) | Any object with `.debug`/`.info`/`.warn`/`.error`/`.fatal` works. |
-| `worker_count` | — | `4` | Currently unused by the delayed writer (which always spins up 2 threads); reserved. |
+| `worker_count` | — | `4` | Number of background threads draining the delayed writer's queue. Falls back to 2 when set to `nil`. |
 | `token_ttl` | — | `nil` | Optional TTL (seconds) requested when generating a `Bearer` access token. |
 | `cache_ttl` | — | `300` | TTL (seconds) for the authorization decision cache. |
 | `trust_proxy_headers` | — | `true` | Whether the per-request `scheme`/`host`/`port` report honors `X-Forwarded-Proto`/`-Host`/`-Port`. See [Reported base URL](#reported-base-url). |
@@ -306,8 +306,20 @@ EndPointBlank::Writers::LogWriter.fatal("out of workers")
 
 All writers (`RequestWriter`, `ResponseWriter`, `ExceptionWriter`, `LogWriter`) enqueue their
 payload onto a bounded, in-memory queue (`DelayedWriter`, capacity 1000, drop-oldest under
-sustained backpressure) drained by two background threads that POST batches via `excon`. Delivery
-is fire-and-forget and never raises into your request cycle.
+sustained backpressure) drained by `worker_count` background threads that POST batches via `excon`.
+Delivery is fire-and-forget and never raises into your request cycle.
+
+A worker thread does not die. A batch can be lost — the intake may be unreachable, or the send path
+may raise something nobody anticipated — but the loop catches every `StandardError`, logs it at
+`error` level through `EndPointBlank.logger` with a running count of consecutive failures, backs off
+(0.1s, doubling, capped at 30s), and keeps draining; the count resets on the first clean pass. Only
+an error outside `StandardError` — `SystemExit`, `Interrupt`, `SignalException`, `NoMemoryError`,
+i.e. the process itself going down — ends a worker.
+
+A writer may optionally define `on_success(response)` and `on_failure(response)` to hear about each
+batch. `on_failure` receives `nil` when the intake never answered at all: `Commands::Http` returns
+`nil` once its three attempts are exhausted, which is the absence of a status rather than a failing
+one. A writer that defines neither is unaffected.
 
 ### Data masking
 

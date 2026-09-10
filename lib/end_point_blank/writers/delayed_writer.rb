@@ -19,6 +19,12 @@ module EndPointBlank
       # Fallback thread count used when Configuration#worker_count is unset,
       # preserving the previously-hardcoded pool size.
       DEFAULT_WORKER_COUNT = 2
+      # Applied after a worker iteration raises, doubling with each consecutive
+      # failure up to the cap. Surviving a defect must not mean retrying as fast
+      # as the CPU allows: a persistent failure should read as a slow, loud
+      # retry, not as a silent hot loop.
+      WORKER_BACKOFF_SECONDS = 0.1
+      MAX_WORKER_BACKOFF_SECONDS = 30
 
       def direct_writer
         @direct_writer ||= DirectWriter.new(url)
@@ -36,27 +42,7 @@ module EndPointBlank
         @threads = []
 
         worker_count.times do
-          @threads << Thread.new do
-            loop do
-              payload = queue.pop
-              payloads = [payload]
-              while (payload = pop_additional)
-                payloads << payload
-              end
-
-              payloads.compact!
-              while payloads.any?
-                list = payloads[0..5]
-                response = direct_writer.write(list)
-                if response.status < 299
-                  on_success(response) if respond_to?(:on_success)
-                elsif respond_to?(:on_failure)
-                  on_failure(response)
-                end
-                payloads -= list
-              end
-            end
-          end
+          @threads << Thread.new { run_worker }
         end
       end
 
@@ -78,7 +64,92 @@ module EndPointBlank
         EndPointBlank.logger.warn(message)
       end
 
+      # Logs a delivery or worker-loop error, through the same seam. Everything
+      # a worker recovers from goes through here: recovering quietly would trade
+      # one silent failure for another.
+      def log_error(message)
+        EndPointBlank.logger.error(message)
+      end
+
       private
+
+      # The body of a worker thread.
+      #
+      # A thread that dies here takes every future payload in the process with
+      # it - silently, until a restart - which is far worse than losing the
+      # batch in flight. So the loop catches every StandardError, says what it
+      # caught, and carries on.
+      #
+      # What it deliberately does not catch is anything outside StandardError:
+      # SystemExit, Interrupt, SignalException, NoMemoryError. Those mean the
+      # process itself is going down or is already broken, and a telemetry
+      # worker has no business arguing with that.
+      def run_worker
+        consecutive_failures = 0
+
+        loop do
+          drain_once
+          consecutive_failures = 0
+        rescue StandardError => e
+          consecutive_failures += 1
+          note_worker_error(e, consecutive_failures)
+          sleep(worker_backoff(consecutive_failures))
+        end
+      end
+
+      # Blocks for the next payload, then takes everything else already waiting
+      # so a burst leaves as a few batches rather than one request per payload.
+      def drain_once
+        payloads = [queue.pop]
+        while (payload = pop_additional)
+          payloads << payload
+        end
+
+        payloads.compact!
+        while payloads.any?
+          list = payloads[0..5]
+          deliver_batch(list)
+          payloads -= list
+        end
+      end
+
+      def deliver_batch(list)
+        response = direct_writer.write(list)
+        return note_unanswered(list) if response.nil?
+
+        if response.status < 299
+          on_success(response) if respond_to?(:on_success)
+        elsif respond_to?(:on_failure)
+          on_failure(response)
+        end
+      end
+
+      # nil is what Commands::Http returns once its retries are exhausted. It is
+      # not a status - it is the absence of an answer - so it is reported rather
+      # than compared: on_failure hears about it with nil, meaning "nothing
+      # answered", and the batch it cost us is named in the log either way.
+      def note_unanswered(list)
+        log_error(
+          "[EndPointBlank] no response from #{url} after retries; " \
+          "#{list.size} payload(s) in that batch are lost"
+        )
+        on_failure(nil) if respond_to?(:on_failure)
+      end
+
+      def note_worker_error(error, consecutive_failures)
+        log_error(
+          "[EndPointBlank] send worker recovered from #{error.class}: #{error.message} " \
+          "(consecutive failure #{consecutive_failures}); the batch in flight is lost, " \
+          "retrying in #{worker_backoff(consecutive_failures).round(1)}s at #{Array(error.backtrace).first}"
+        )
+      end
+
+      def worker_backoff(consecutive_failures)
+        [
+          WORKER_BACKOFF_SECONDS * (2**(consecutive_failures - 1)),
+          MAX_WORKER_BACKOFF_SECONDS
+        ].min
+      end
 
       def enqueue_mutex
         @enqueue_mutex ||= Mutex.new
