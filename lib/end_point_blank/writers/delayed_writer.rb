@@ -16,6 +16,10 @@ module EndPointBlank
     module DelayedWriter
       MAX_QUEUE_SIZE = 1000
       WARN_THROTTLE_SECONDS = 30
+      # Payloads per outbound request. One request per payload would multiply
+      # the host application's outbound traffic by its own request rate; the
+      # drain exists to amortise that.
+      BATCH_SIZE = 6
       # Fallback thread count used when Configuration#worker_count is unset,
       # preserving the previously-hardcoded pool size.
       DEFAULT_WORKER_COUNT = 2
@@ -99,6 +103,19 @@ module EndPointBlank
 
       # Blocks for the next payload, then takes everything else already waiting
       # so a burst leaves as a few batches rather than one request per payload.
+      #
+      # The batches are cut by position, and that is the point. This used to
+      # take a prefix and then remove it with `payloads -= list`, and Array#-
+      # removes every element *equal to* one in the batch rather than the ones
+      # actually sent: seven byte-identical payloads with a batch size of six
+      # meant six delivered and all seven gone. Nothing counted the loss and the
+      # queue drained normally, so it read as if nothing had happened.
+      #
+      # Equal payloads are ordinary, not exotic. Payloads are hashes, and two
+      # requests to the same endpoint from the same application in the same
+      # environment differ only in high-cardinality fields; `sent_at` at
+      # millisecond precision is not a reliable discriminator at ingest volumes.
+      # Slicing by index makes equality irrelevant rather than merely handled.
       def drain_once
         payloads = [queue.pop]
         while (payload = pop_additional)
@@ -106,11 +123,7 @@ module EndPointBlank
         end
 
         payloads.compact!
-        while payloads.any?
-          list = payloads[0..5]
-          deliver_batch(list)
-          payloads -= list
-        end
+        payloads.each_slice(BATCH_SIZE) { |list| deliver_batch(list) }
       end
 
       def deliver_batch(list)

@@ -95,8 +95,17 @@ RSpec.describe EndPointBlank::Rails::Authenticated do
         client_auth: "Bearer client-token",
         application: "spec-app",
         endpoint_version: "1",
-        ip_address: "203.0.113.7"
+        source_ip: "203.0.113.7"
       )
+    end
+
+    # The same key, asserted through the concern rather than the command, so
+    # the name is pinned on the path a host application actually takes.
+    it "names the caller's IP the way intake reads it" do
+      controller.authenticate!
+
+      expect(intake_calls.first[:body]).to include(source_ip: "203.0.113.7")
+      expect(intake_calls.first[:body]).not_to have_key(:ip_address)
     end
 
     it "strips a route's optional segments so every request on a route reports the same path" do

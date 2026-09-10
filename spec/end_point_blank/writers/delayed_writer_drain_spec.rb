@@ -129,6 +129,55 @@ RSpec.describe "EndPointBlank::Writers::DelayedWriter draining the queue" do
     expect(drain(2).map(&:size)).to eq([6, 4])
   end
 
+  # `payloads -= list` removed every element *equal to* one in the batch rather
+  # than the ones actually sent, so a queue holding duplicates lost the extras
+  # without sending them and without saying so. Payloads are hashes: two
+  # requests to the same endpoint, from the same application, in the same
+  # environment differ only in high-cardinality fields, and `sent_at` at
+  # millisecond precision does not reliably separate them at ingest volumes.
+  context "when the queue holds byte-identical payloads" do
+    it "delivers every one of them, not one per distinct value" do
+      7.times { writer.enqueue({ id: :same }) }
+
+      writer.start_threads
+
+      expect(drain(2).flatten.size).to eq(7)
+    end
+
+    it "batches them by position, so the seventh follows the first six" do
+      7.times { writer.enqueue({ id: :same }) }
+
+      writer.start_threads
+
+      expect(drain(2).map(&:size)).to eq([6, 1])
+    end
+
+    # More than two batches, so this is not a one-off remainder: nothing is
+    # lost at any boundary.
+    it "keeps delivering duplicates across every batch of a long run" do
+      13.times { writer.enqueue({ id: :same }) }
+
+      writer.start_threads
+
+      expect(drain(3).map(&:size)).to eq([6, 6, 1])
+    end
+
+    # The values are equal but the count is what matters, so assert the count
+    # rather than the set: `uniq` would hide exactly the defect under test.
+    it "sends duplicates that are mixed in among distinct payloads" do
+      writer.enqueue({ id: :a })
+      5.times { writer.enqueue({ id: :same }) }
+      writer.enqueue({ id: :b })
+      writer.enqueue({ id: :same })
+
+      writer.start_threads
+
+      expect(drain(2).flatten).to eq(
+        [{ id: :a }] + Array.new(5) { { id: :same } } + [{ id: :b }, { id: :same }]
+      )
+    end
+  end
+
   it "tells a writer that asks about a successful delivery" do
     reporting = reporting_writer_class.new(url)
     reporting.start_threads

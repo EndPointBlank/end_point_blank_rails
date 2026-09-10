@@ -82,8 +82,21 @@ RSpec.describe EndPointBlank::Commands::BasicAuthenticate do
         client_auth: "Bearer client-token",
         application: "spec-app",
         endpoint_version: "1",
-        ip_address: "203.0.113.7"
+        source_ip: "203.0.113.7"
       )
+    end
+
+    # intake reads `source_ip`. This command sent `ip_address`, and intake
+    # ignores keys it does not cast, so nothing failed and nothing said
+    # anything -- `source_ip_address` was simply NULL on every authenticate row
+    # from a Rails application. The key is asserted as a literal against the
+    # body that actually went over the wire; a double that accepts any body
+    # would prove nothing, which is how a key bug survives.
+    it "names the caller's IP the way intake reads it" do
+      described_class.authenticate(guarded_request)
+
+      expect(calls.first[:body]).to include(source_ip: "203.0.113.7")
+      expect(calls.first[:body]).not_to have_key(:ip_address)
     end
   end
 
