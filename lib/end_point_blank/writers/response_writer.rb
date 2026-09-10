@@ -12,6 +12,7 @@ module EndPointBlank
       attr_reader :url
 
       def initialize
+        super()
         @url = EndPointBlank::Configuration.instance.responses_url
         start_threads
       end
