@@ -64,7 +64,6 @@ RSpec.describe EndPointBlank::Writers::LogWriter do
 
   before do
     allow(writer).to receive(:enqueue) { |payload| enqueued << payload }
-    allow(writer).to receive(:puts)
   end
 
   it "records a message at info level" do
