@@ -20,10 +20,18 @@ module EndPointBlank
         instance.write(exception)
       end
 
+      # Builds an error payload with or without an in-flight request. `env` is
+      # nil whenever an exception is reported from outside `EnvStore`'s scope
+      # (a background job, a worker, a boot-time failure) -- that is precisely
+      # the case this method exists to handle, not an edge case to special-case
+      # away. `Rack::Request.new(env)` was built unconditionally here even
+      # though nothing about an error report requires a request: version
+      # detection (Commands::VersionFinder) reads request params/path and is
+      # meaningless without one, so it is skipped rather than attempted and
+      # rescued. Its result was never even merged into the returned hash, so
+      # skipping it changes nothing for the in-request case either.
       def payload(exception)
         env = ::EndPointBlank::Rack::EnvStore.get
-        request = ::Rack::Request.new(env)
-        version = Commands::VersionFinder.new.find(request)
         {
           app_name: app_name,
           uuid: request_uuid(env),
