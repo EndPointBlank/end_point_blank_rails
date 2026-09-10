@@ -61,7 +61,6 @@ module EndPointBlank
             stamped_http_method: rack_req.request_method
           )
         end
-        puts "Writing log: #{json}"
         enqueue(json)
       end
     end
