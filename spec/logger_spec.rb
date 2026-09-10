@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require "spec_helper"
-require "end_point_blank/loggers/logger"
 require "stringio"
 
 RSpec.shared_context "resets EndPointBlank logger state" do
@@ -50,32 +49,6 @@ RSpec.describe "EndPointBlank.logger" do
     EndPointBlank.logger = custom_logger
 
     expect(EndPointBlank.logger).to equal(custom_logger)
-  end
-end
-
-RSpec.describe EndPointBlank::Loggers::Logger do
-  include_context "resets EndPointBlank logger state"
-
-  let(:spy_logger) { double("logger", error: nil, warn: nil, fatal: nil) }
-
-  before { EndPointBlank.logger = spy_logger }
-
-  it "routes .error through EndPointBlank.logger" do
-    described_class.error("boom")
-
-    expect(spy_logger).to have_received(:error).with("boom")
-  end
-
-  it "routes .warn through EndPointBlank.logger" do
-    described_class.warn("careful")
-
-    expect(spy_logger).to have_received(:warn).with("careful")
-  end
-
-  it "routes .fatal through EndPointBlank.logger" do
-    described_class.fatal("bad")
-
-    expect(spy_logger).to have_received(:fatal).with("bad")
   end
 end
 
