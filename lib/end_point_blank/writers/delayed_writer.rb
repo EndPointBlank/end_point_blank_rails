@@ -30,10 +30,32 @@ module EndPointBlank
       WORKER_BACKOFF_SECONDS = 0.1
       MAX_WORKER_BACKOFF_SECONDS = 30
 
+      # sc-376: eager, so `queue`/`enqueue_mutex` are never nil for any
+      # worker thread. Every real includer (RequestWriter, ResponseWriter,
+      # ExceptionWriter, LogWriter) calls `super()` here before
+      # `start_threads`, so this always runs first, single-threaded, before
+      # any worker exists. An includer whose `initialize` skips `super`
+      # (some of this module's own specs, deliberately) never reaches this;
+      # `queue`/`enqueue_mutex` fall back to lazy `||=` for those.
+      def initialize
+        @queue = Queue.new
+        @enqueue_mutex = Mutex.new
+      end
+
       def direct_writer
         @direct_writer ||= DirectWriter.new(url)
       end
 
+      # `@queue ||= Queue.new` is a read, a nil check, then a write -- not
+      # atomic. Two threads racing this before either assigns could each
+      # allocate their own Queue, and the loser's is an orphan nothing will
+      # ever read from again. In production only this class's own worker
+      # threads could ever race here (every writer is a Singleton whose
+      # `initialize`, and so `super()` above, completes before any caller
+      # can reach `enqueue`), and `initialize` above now sets `@queue`
+      # before `start_threads` spawns a single one of them. The `||=` stays
+      # only as a fallback for an includer that skips this module's
+      # `initialize` entirely -- see the comment there.
       def queue
         @queue ||= Queue.new
       end
@@ -164,6 +186,10 @@ module EndPointBlank
         ].min
       end
 
+      # Same shape and same fallback rationale as `queue` above, and worse in
+      # kind if it ever raced: two threads synchronizing on *different* Mutex
+      # objects are not synchronized at all, so the critical section in
+      # `enqueue_one` would silently stop being one.
       def enqueue_mutex
         @enqueue_mutex ||= Mutex.new
       end
