@@ -1,5 +1,71 @@
 # Changelog
 
+## 0.9.0
+
+### Fixed
+
+- **One unreachable intake no longer ends telemetry for the life of the
+  process.** `Commands::Http.post` returns `nil` once its three attempts are
+  exhausted; `DirectWriter#write` passed that straight back; and the delayed
+  writer's worker loop called `response.status` on it. The resulting
+  `NoMethodError` escaped `loop do`, which is the whole body of the worker
+  thread, so the thread died — and a dead worker is not a failed delivery, it is
+  the end of delivery. Every payload enqueued afterwards sat in the queue until
+  it was pushed out by the drop-oldest bound, and nothing said so, because a
+  dead thread raises nothing and logs nothing. The trigger was the most ordinary
+  event there is: the intake briefly unreachable.
+
+  Every other telemetry drop in this gem costs one batch. This one cost all of
+  them, from one transient failure, with no recovery short of restarting the
+  host application.
+
+- **A `nil` response is treated as the absence of an answer, not as a status.**
+  There is nothing to compare `nil` against, so it is not compared. The batch is
+  reported through `on_failure` — with `nil`, meaning *nothing answered* — and
+  named in an `error` log line that says how many payloads went with it. A
+  writer that implements neither callback is unaffected, as before.
+
+### Changed
+
+- **The worker loop now survives anything a delivery can throw.** The `nil`
+  above is one defect of a shape that has now been fixed in a writer three
+  times, so this release fixes the shape rather than the instance: every
+  `StandardError` raised anywhere in an iteration is caught, logged, and
+  followed by another iteration. `DirectWriter#write` calls
+  `Authorization.header` before it calls the transport, which is a second
+  unguarded path into the same loop; it is covered too, without having had to be
+  enumerated.
+
+  Recovering silently would only trade one silent failure for another, so it is
+  not silent:
+
+  - every recovered error is logged at `error` level through
+    `EndPointBlank.logger`, with the exception class, its message, the top
+    backtrace frame, and a **count of consecutive failures** — so a persistent
+    fault reads as `consecutive failure 47`, not as forty-seven
+    indistinguishable lines;
+  - consecutive failures back off, `WORKER_BACKOFF_SECONDS` (0.1s) doubling to
+    `MAX_WORKER_BACKOFF_SECONDS` (30s), so a permanently broken send path is a
+    slow loud retry rather than a hot loop with a fan attached. The counter
+    resets on the first clean pass.
+
+  What is deliberately *not* caught is anything outside `StandardError` —
+  `SystemExit`, `Interrupt`, `SignalException`, `NoMemoryError`. Those mean the
+  process itself is going down or is already broken, and a fire-and-forget
+  telemetry worker has no business arguing with that.
+
+- **`worker_count` is documented as what it is.** The README described it as
+  "currently unused by the delayed writer (which always spins up 2 threads);
+  reserved". It has been honoured for some time: the pool is `worker_count`
+  threads, and the hardcoded 2 survives only as the fallback used when it is set
+  to `nil`.
+
+### Unchanged
+
+- No public API is removed or renamed. `on_success`/`on_failure` remain
+  optional, and the only change to their contract is that `on_failure` can now
+  receive `nil`, in the case where it previously could not be reached at all.
+
 ## 0.8.0
 
 ### Fixed

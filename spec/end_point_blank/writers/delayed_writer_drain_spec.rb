@@ -87,6 +87,30 @@ RSpec.describe "EndPointBlank::Writers::DelayedWriter draining the queue" do
     collected
   end
 
+  # Blocks until the background worker has put something on `queue`, so an
+  # assertion about work done off the main thread is a wait rather than a race.
+  def take(queue, timeout: 2)
+    deadline = Time.now + timeout
+    loop do
+      return queue.pop(true)
+    rescue ThreadError
+      raise "nothing arrived on the queue within #{timeout}s" if Time.now > deadline
+
+      sleep 0.005
+    end
+  end
+
+  def wait_for(timeout: 2)
+    deadline = Time.now + timeout
+    sleep(0.005) until yield || Time.now > deadline
+  end
+
+  # The worker threads report through these; stub them wherever a test provokes
+  # a failure on purpose, so the suite does not print the real thing to stderr.
+  def silence_worker_logging(target)
+    allow(target).to receive(:log_error)
+  end
+
   it "delivers an enqueued payload to the writer's URL" do
     writer.start_threads
     writer.enqueue({ id: 1 })
@@ -136,30 +160,142 @@ RSpec.describe "EndPointBlank::Writers::DelayedWriter draining the queue" do
     end
   end
 
-  it "keeps draining after the intake becomes unreachable" do
-    pending(
-      "BUG: Commands::Http.post returns nil when the intake cannot be reached, and the worker loop calls " \
-      "response.status on it unguarded. The NoMethodError escapes `loop do` and silently kills the worker " \
-      "thread, so the writer stops delivering anything for the rest of the process's life."
-    )
+  # Commands::Http returns nil once its retries are exhausted. That is not a
+  # status, it is the absence of an answer, and the worker used to call
+  # `.status` on it.
+  context "when nothing answers at all" do
+    before { allow(EndPointBlank::Commands::Http).to receive(:post).and_return(nil) }
 
-    original_reporting = Thread.report_on_exception
-    Thread.report_on_exception = false
+    it "keeps draining after the intake becomes unreachable" do
+      silence_worker_logging(writer)
+      writer.start_threads
+      writer.enqueue({ id: :lost })
+      sleep 0.05
 
-    allow(EndPointBlank::Commands::Http).to receive(:post).and_return(nil)
-    writer.start_threads
-    writer.enqueue({ id: :lost })
-    sleep 0.05
+      allow(EndPointBlank::Commands::Http).to receive(:post) do |_url, _auth, body|
+        batches << body[:payload]
+        double("response", status: 200, body: "{}")
+      end
+      writer.enqueue({ id: :next })
 
-    allow(EndPointBlank::Commands::Http).to receive(:post) do |_url, _auth, body|
-      batches << body[:payload]
-      double("response", status: 200, body: "{}")
+      expect(drain(1, timeout: 1)).to eq([[{ id: :next }]])
     end
-    writer.enqueue({ id: :next })
 
-    expect(drain(1, timeout: 0.5)).to eq([[{ id: :next }]])
-  ensure
-    Thread.report_on_exception = original_reporting
+    it "hands the missing answer to a writer that asks about failures" do
+      reporting = reporting_writer_class.new(url)
+      silence_worker_logging(reporting)
+      reporting.start_threads
+      reporting.enqueue({ id: 1 })
+
+      wait_for { reporting.failures.any? }
+      expect(reporting.failures).to eq([nil])
+      reporting.instance_variable_get(:@threads).each(&:kill)
+    end
+
+    it "says which batch it lost rather than dropping it quietly" do
+      logged = Queue.new
+      allow(writer).to receive(:log_error) { |message| logged << message }
+      writer.start_threads
+      writer.enqueue({ id: 1 })
+
+      expect(take(logged)).to include("no response from #{url}", "1 payload(s)")
+    end
+
+    it "does not require a writer to implement either callback" do
+      silence_worker_logging(writer)
+      writer.start_threads
+      writer.enqueue({ id: 1 })
+      sleep 0.05
+
+      expect(writer.instance_variable_get(:@threads)).to all(be_alive)
+    end
+  end
+
+  # The nil above is one defect of a shape that has bitten this writer three
+  # times. The loop has to outlive the next one too, whatever it turns out to
+  # be: a dead worker loses every payload for the life of the process, which is
+  # far worse than losing the batch in flight.
+  context "when the send path raises something the loop never expected" do
+    let(:original_reporting) { Thread.report_on_exception }
+
+    before do
+      original_reporting
+      Thread.report_on_exception = false
+    end
+
+    after { Thread.report_on_exception = original_reporting }
+
+    it "keeps draining" do
+      silence_worker_logging(writer)
+      calls = 0
+      allow(EndPointBlank::Commands::Http).to receive(:post) do |_url, _auth, body|
+        calls += 1
+        raise "intake exploded" if calls == 1
+
+        batches << body[:payload]
+        double("response", status: 200, body: "{}")
+      end
+
+      writer.start_threads
+      writer.enqueue({ id: :lost })
+      sleep 0.05
+      writer.enqueue({ id: :next })
+
+      expect(drain(1, timeout: 2)).to eq([[{ id: :next }]])
+    end
+
+    it "logs what it recovered from, and counts how long it has been failing" do
+      logged = Queue.new
+      allow(writer).to receive(:log_error) { |message| logged << message }
+      allow(EndPointBlank::Commands::Http).to receive(:post).and_raise("intake exploded")
+
+      writer.start_threads
+      writer.enqueue({ id: 1 })
+      first = take(logged)
+      writer.enqueue({ id: 2 })
+      second = take(logged)
+
+      expect(first).to include("RuntimeError", "intake exploded", "consecutive failure 1")
+      expect(second).to include("consecutive failure 2")
+    end
+
+    # Surviving must not mean retrying as fast as the CPU allows: that is a
+    # silent failure with a fan attached.
+    it "backs off instead of retrying in a hot loop" do
+      silence_worker_logging(writer)
+      attempts = Queue.new
+      allow(EndPointBlank::Commands::Http).to receive(:post) do
+        attempts << Time.now
+        raise "intake exploded"
+      end
+
+      writer.enqueue({ id: :warmup })
+      writer.start_threads
+      feeder = Thread.new do
+        250.times do
+          writer.enqueue({ id: :more })
+          sleep 0.002
+        end
+      end
+      sleep 0.5
+      feeder.kill
+
+      expect(attempts.size).to be_between(2, 25)
+    end
+
+    # StandardError is caught; an Exception that is not one means the process
+    # itself is going down, and a telemetry worker must not argue with that.
+    it "still lets a process-level error end the thread" do
+      silence_worker_logging(writer)
+      allow(EndPointBlank::Commands::Http).to receive(:post).and_raise(Interrupt)
+
+      writer.start_threads
+      writer.enqueue({ id: 1 })
+
+      thread = writer.instance_variable_get(:@threads).first
+      wait_for { !thread.alive? }
+      expect(thread).not_to be_alive
+    end
   end
 end
 # rubocop:enable Metrics/BlockLength
