@@ -1,3 +1,5 @@
+require "securerandom"
+
 module EndPointBlank
   module Writers
     module Shared
@@ -24,11 +26,19 @@ module EndPointBlank
       end
 
       # Rails' ActionDispatch::Request#uuid simply reads this same Rack env
-      # key, so this is behavior-preserving when running under Rails, and
-      # gracefully returns nil when it isn't (plain Rack / Sinatra), instead
-      # of requiring actionpack's ActionDispatch::Request to be loaded.
+      # key, so reading it directly is behavior-preserving when running under
+      # Rails, without requiring actionpack's ActionDispatch::Request to be
+      # loaded.
+      #
+      # Outside Rails (plain Rack / Sinatra) nothing sets that key. Falling
+      # through to nil there used to be described as "graceful", but it is
+      # not: intake requires `uuid` on every error/log/request/response row
+      # and refuses the ones that lack it, so a nil uuid is a silently
+      # dropped row, not a tolerated one. Minting a fresh uuid instead means
+      # the row still lands -- correlating with nothing is strictly better
+      # than not existing.
       def request_uuid(env)
-        env && env["action_dispatch.request_id"]
+        (env && env["action_dispatch.request_id"]) || SecureRandom.uuid
       end
 
       def apply_masking(payload, record_type)
