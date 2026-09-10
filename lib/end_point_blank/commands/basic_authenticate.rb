@@ -30,7 +30,16 @@ module EndPointBlank
             client_auth: client_auth,
             application: Configuration.instance.app_name,
             endpoint_version: VersionFinder.new.find(request),
-            ip_address: request.remote_ip
+            # `source_ip`, which is the key intake reads. This sent
+            # `ip_address` from the beginning -- and js, py and java copied it
+            # faithfully, so all four were wrong together until sc-320 fixed
+            # the three ports. intake ignores keys it does not cast, so nothing
+            # ever failed: `source_ip_address` was simply NULL on every
+            # authenticate row from a Rails application, and every per-source-IP
+            # question about authenticate traffic read as though there were
+            # none. EndpointAuthorize on the next path over has always sent it
+            # under the right name.
+            source_ip: request.remote_ip
           }
           response = Http.post(configuration.authorize_url, auth, body)
           return nil if response.nil?

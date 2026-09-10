@@ -306,7 +306,8 @@ EndPointBlank::Writers::LogWriter.fatal("out of workers")
 
 All writers (`RequestWriter`, `ResponseWriter`, `ExceptionWriter`, `LogWriter`) enqueue their
 payload onto a bounded, in-memory queue (`DelayedWriter`, capacity 1000, drop-oldest under
-sustained backpressure) drained by `worker_count` background threads that POST batches via `excon`.
+sustained backpressure) drained by `worker_count` background threads that POST batches via `excon`,
+six payloads per request. Batches are cut by position, so two identical payloads are two payloads.
 Delivery is fire-and-forget and never raises into your request cycle.
 
 A worker thread does not die. A batch can be lost — the intake may be unreachable, or the send path

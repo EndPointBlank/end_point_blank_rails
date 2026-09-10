@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.10.0
+
+### Fixed
+
+- **The send queue no longer drops duplicate payloads.** The drain took a batch
+  off the front of the pending list and then removed it with `payloads -= list`.
+  `Array#-` removes every element *equal to* one in the batch, not the ones
+  actually sent: seven byte-identical payloads with a batch size of six meant
+  six delivered and all seven gone. Nothing counted the loss, nothing logged it,
+  and the queue drained normally, so it read as if nothing had happened.
+
+  Equal payloads are ordinary rather than exotic. Payloads are hashes, and two
+  requests to the same endpoint, from the same application, in the same
+  environment differ only in high-cardinality fields; `sent_at` at millisecond
+  precision is not a reliable discriminator at ingest volumes. Any genuinely
+  duplicate pair lost a member every time it landed in an over-full batch.
+
+  Batches are now cut by position — `each_slice(BATCH_SIZE)` over the pending
+  list, with no removal step at all — which makes equality irrelevant rather
+  than merely handled. The batch size (6) is a named constant instead of a
+  `[0..5]` in the middle of the loop; the batching behaviour is otherwise
+  unchanged.
+
+- **The authenticate payload names the caller's IP `source_ip`.** It sent
+  `ip_address`; intake reads `source_ip` and casts it into `source_ip_address`.
+  intake ignores keys it does not cast, so nothing crashed and nothing was
+  refused — `source_ip_address` was simply NULL on every authenticate row from a
+  Rails application, and any per-source-IP question about authenticate traffic
+  read as though there were no traffic.
+
+  This was not a porting slip. This gem has always sent `ip_address`, and the
+  JS, Python and Java ports copied it faithfully, so all four were wrong
+  together until those three were fixed. `EndpointAuthorize`, on the next path
+  over, has always sent `source_ip` correctly.
+
+  Because intake never read the old key, this can only begin populating a column
+  that has never held anything: no migration, and nothing to be compatible with.
+
 ## 0.9.0
 
 ### Fixed
