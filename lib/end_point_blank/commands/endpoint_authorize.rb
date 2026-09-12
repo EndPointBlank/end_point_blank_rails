@@ -40,6 +40,7 @@ module EndPointBlank
           # headers would appear only on cache misses, which reads as a flaky
           # feature rather than a missing one.
           if (cached = cache.retrieve(cache_key))
+            record_source_application_environment_id(cached)
             return CachedResponse.new(201, cached)
           end
 
@@ -69,11 +70,55 @@ module EndPointBlank
           return nil if response.nil?
           EndPointBlank.logger.info "Authentication response: #{response.status} - #{response.body}"
           if response.status == 201
+            record_source_application_environment_id(response.body)
             cache.store(cache_key, response.body)
           elsif response.status > 299
             EndPointBlank.logger.error "Failed to authorize endpoint: #{response.status} - #{response.body}"
           end
           response
+        end
+
+        private
+
+        # Intake renders the grant under data[0]. The Rails controller also
+        # records this value, but the command is also used directly (today,
+        # by end_point_blank_deploy's conformance driver), so the command must
+        # carry the grant into the request store before any writer runs.
+        def record_source_application_environment_id(body)
+          parsed = JSON.parse(body)
+          # A 201 whose body is valid JSON but not a Hash -- `[]`, `null`,
+          # `"x"` -- used to reach `dig` below and raise (TypeError for an
+          # Array, NoMethodError for nil or a String), turning a request
+          # intake had actually GRANTED into a crash for this direct-caller
+          # path. The other SDKs all guard the type before digging into the
+          # body (py: isinstance on both levels, js: optional chaining,
+          # elixir: pattern match with a fallback clause); this matches them.
+          unless parsed.is_a?(Hash)
+            EndPointBlank.logger.error(
+              "Authorized, but the response body did not parse to a JSON object, so this " \
+              "request's responses, logs and errors will not name their caller: body=#{body}"
+            )
+            return ::EndPointBlank::Rack::EnvStore.set_source_application_environment_id(nil)
+          end
+
+          id = parsed.dig('data', 0, 'source_application_environment_id')
+          # An empty string is the same absence as a missing id -- do not
+          # record it, or the log line above claiming the caller "will not be
+          # named" is contradicted by the very next line.
+          id = nil if id == ''
+          if id.nil?
+            EndPointBlank.logger.error(
+              "Authorized, but the response has no data[0].source_application_environment_id, " \
+              "so this request's responses, logs and errors will not name their caller: body=#{body}"
+            )
+          end
+          ::EndPointBlank::Rack::EnvStore.set_source_application_environment_id(id)
+        rescue JSON::ParserError
+          EndPointBlank.logger.error(
+            "Authorized, but the response body is not valid JSON, so this request's responses, " \
+            "logs and errors will not name their caller: body=#{body}"
+          )
+          ::EndPointBlank::Rack::EnvStore.set_source_application_environment_id(nil)
         end
       end
 
