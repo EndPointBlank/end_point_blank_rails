@@ -101,6 +101,24 @@ RSpec.describe EndPointBlank::Commands::BasicAuthenticate do
   end
 
   describe "what it hands back" do
+    it "records the granted source environment for the current request" do
+      EndPointBlank::Rack::EnvStore.set({})
+      answer_body = JSON.generate(
+        "data" => [{ "source_application_environment_id" => "source-env-123" }]
+      )
+      allow(Excon).to receive(:post) do |url, options|
+        calls << { url: url, auth: options[:headers]["Authorization"],
+                   body: JSON.parse(options[:body], symbolize_names: true) }
+        intake_answer(201, answer_body)
+      end
+
+      described_class.authenticate(guarded_request)
+
+      expect(EndPointBlank::Rack::EnvStore.source_application_environment_id).to eq("source-env-123")
+    ensure
+      EndPointBlank::Rack::EnvStore.clear
+    end
+
     it "is intake's response" do
       expect(described_class.authenticate(guarded_request).status).to eq(201)
     end
@@ -120,6 +138,23 @@ RSpec.describe EndPointBlank::Commands::BasicAuthenticate do
 
       it "is nil, which the caller reads as 503" do
         expect(described_class.authenticate(guarded_request)).to be_nil
+      end
+    end
+
+    # `JSON.parse` accepts any RFC 7159 document, not just objects: `null`,
+    # `[]`, `5` and `"x"` all parse without raising `JSON::ParserError`. Code
+    # that only rescues that one error class and then calls `.dig` on
+    # whatever came back raises `TypeError`/`NoMethodError` instead, and
+    # nothing catches those -- they escape `authenticate`, escape
+    # `before_action :authenticate!`, and the host application answers 500 to
+    # a caller intake just finished authenticating. A metadata-recording
+    # change must never flip the flow's pass/fail outcome, so a 201 has to
+    # stay a 201 no matter what shape its body turns out to be.
+    context "when intake answers 201 with a body that is valid JSON but not an object" do
+      let(:answer) { intake_answer(201, "[]") }
+
+      it "is still intake's response, status intact, rather than an exception" do
+        expect(described_class.authenticate(guarded_request).status).to eq(201)
       end
     end
   end

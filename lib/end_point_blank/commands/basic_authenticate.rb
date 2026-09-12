@@ -1,5 +1,6 @@
 #!/bin/ruby
 
+require 'json'
 require_relative 'http'
 
 module EndPointBlank
@@ -44,10 +45,52 @@ module EndPointBlank
           response = Http.post(configuration.authorize_url, auth, body)
           return nil if response.nil?
           EndPointBlank.logger.info "Authentication response: #{response.status} - #{response.body}"
+          if response.status == 201
+            source_env_id = source_application_environment_id(response.body)
+            ::EndPointBlank::Rack::EnvStore.set_source_application_environment_id(source_env_id)
+          end
           if response.status > 299
             EndPointBlank.logger.error "Failed to authenticate: #{response.status} - #{response.body}"
           end
           response
+        end
+
+        private
+
+        def source_application_environment_id(body)
+          parsed = JSON.parse(body)
+          # `JSON.parse` succeeds on any RFC 7159 document, not just objects --
+          # `null`, `[]`, `5` and `"x"` all parse cleanly. `.dig('data', 0, ...)`
+          # on any of those raises `TypeError`/`NoMethodError`, which nothing
+          # downstream rescues: it would escape `authenticate` and turn a 201
+          # intake just granted into a 500 for the caller. Guard the shape
+          # before reading fields out of it, the same way
+          # `UnauthorizedError.reason_from` guards its own parsed body.
+          unless parsed.is_a?(Hash)
+            EndPointBlank.logger.error(
+              "Authenticated, but the authorize response body was not a JSON " \
+              "object, so this request's responses, logs and errors will not " \
+              "name their caller: body=#{body}"
+            )
+            return nil
+          end
+
+          id = parsed.dig('data', 0, 'source_application_environment_id')
+          return id if id.is_a?(String) && !id.empty?
+
+          EndPointBlank.logger.error(
+            "Authenticated, but the authorize response has no " \
+            "data[0].source_application_environment_id, so this request's responses, " \
+            "logs and errors will not name their caller: body=#{body}"
+          )
+          nil
+        rescue JSON::ParserError => error
+          EndPointBlank.logger.error(
+            "Authenticated, but the authorize response body was not valid " \
+            "JSON, so this request's responses, logs and errors will not " \
+            "name their caller: #{error.message}"
+          )
+          nil
         end
       end
 
