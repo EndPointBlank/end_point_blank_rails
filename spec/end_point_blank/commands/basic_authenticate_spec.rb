@@ -101,6 +101,24 @@ RSpec.describe EndPointBlank::Commands::BasicAuthenticate do
   end
 
   describe "what it hands back" do
+    it "records the granted source environment for the current request" do
+      EndPointBlank::Rack::EnvStore.set({})
+      answer_body = JSON.generate(
+        "data" => [{ "source_application_environment_id" => "source-env-123" }]
+      )
+      allow(Excon).to receive(:post) do |url, options|
+        calls << { url: url, auth: options[:headers]["Authorization"],
+                   body: JSON.parse(options[:body], symbolize_names: true) }
+        intake_answer(201, answer_body)
+      end
+
+      described_class.authenticate(guarded_request)
+
+      expect(EndPointBlank::Rack::EnvStore.source_application_environment_id).to eq("source-env-123")
+    ensure
+      EndPointBlank::Rack::EnvStore.clear
+    end
+
     it "is intake's response" do
       expect(described_class.authenticate(guarded_request).status).to eq(201)
     end
