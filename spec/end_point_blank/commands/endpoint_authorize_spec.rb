@@ -114,6 +114,14 @@ RSpec.describe EndPointBlank::Commands::EndpointAuthorize do
       expect(result.status).to eq(201)
       expect(JSON.parse(result.body)).to eq("data" => [{ "source_application_environment_id" => 42 }])
     end
+
+    it "records the granted source environment for direct command callers" do
+      request = request_double
+      EndPointBlank::Rack::EnvStore.set(request.env)
+      described_class.authorize(request)
+
+      expect(EndPointBlank::Rack::EnvStore.source_application_environment_id).to eq(42)
+    end
   end
 
   describe "caching an authorization" do

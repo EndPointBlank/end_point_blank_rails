@@ -40,6 +40,7 @@ module EndPointBlank
           # headers would appear only on cache misses, which reads as a flaky
           # feature rather than a missing one.
           if (cached = cache.retrieve(cache_key))
+            record_source_application_environment_id(cached)
             return CachedResponse.new(201, cached)
           end
 
@@ -69,11 +70,36 @@ module EndPointBlank
           return nil if response.nil?
           EndPointBlank.logger.info "Authentication response: #{response.status} - #{response.body}"
           if response.status == 201
+            record_source_application_environment_id(response.body)
             cache.store(cache_key, response.body)
           elsif response.status > 299
             EndPointBlank.logger.error "Failed to authorize endpoint: #{response.status} - #{response.body}"
           end
           response
+        end
+
+        private
+
+        # Intake renders the grant under data[0]. The Rails controller also
+        # records this value, but the command is used directly by Rack and
+        # other integrations, so the command must carry the grant into the
+        # request store before any writer runs.
+        def record_source_application_environment_id(body)
+          parsed = JSON.parse(body)
+          id = parsed.dig('data', 0, 'source_application_environment_id')
+          if id.nil? || id == ''
+            EndPointBlank.logger.error(
+              "Authorized, but the response has no data[0].source_application_environment_id, " \
+              "so this request's responses, logs and errors will not name their caller: body=#{body}"
+            )
+          end
+          ::EndPointBlank::Rack::EnvStore.set_source_application_environment_id(id)
+        rescue JSON::ParserError
+          EndPointBlank.logger.error(
+            "Authorized, but the response body is not valid JSON, so this request's responses, " \
+            "logs and errors will not name their caller: body=#{body}"
+          )
+          ::EndPointBlank::Rack::EnvStore.set_source_application_environment_id(nil)
         end
       end
 
