@@ -124,6 +124,47 @@ RSpec.describe EndPointBlank::Commands::EndpointAuthorize do
     end
   end
 
+  # Senior-dev review on PR #37: a 201 whose body is valid JSON but not a Hash
+  # parses cleanly and then blows up on `dig`, for exactly the direct-caller
+  # shape this class exists to serve. Confirmed in this repo's Ruby: `[]` ->
+  # TypeError ("no implicit conversion of String into Integer"), `null` and
+  # `"x"` -> NoMethodError ("undefined method 'dig'"). Before the fix, a
+  # misconfigured proxy/LB/WAF answering 201 with one of these bodies turned an
+  # actually-granted authorization into a raised exception instead of a fast
+  # success with an unattributed caller.
+  describe "when the response body is valid JSON but not an object" do
+    ["[]", "null", "\"x\""].each do |raw_body|
+      it "does not raise for a #{raw_body.inspect} body, and leaves the caller unnamed" do
+        authorize_queue.replace([http_response(201, raw_body)])
+        request = request_double
+        EndPointBlank::Rack::EnvStore.set(request.env)
+
+        result = nil
+        expect { result = described_class.authorize(request) }.not_to raise_error
+
+        expect(result.status).to eq(201)
+        expect(EndPointBlank::Rack::EnvStore.source_application_environment_id).to be_nil
+      end
+    end
+  end
+
+  # Senior-dev review on PR #37, finding 3: the empty-string branch logged that
+  # the caller "will not name" itself and then recorded the empty string
+  # anyway, contradicting its own log line. An empty id must be treated the
+  # same as a missing one.
+  describe "when the granted source environment id is blank" do
+    it "records nil rather than the empty string" do
+      body = JSON.generate(data: [{ "source_application_environment_id" => "" }])
+      authorize_queue.replace([http_response(201, body)])
+      request = request_double
+      EndPointBlank::Rack::EnvStore.set(request.env)
+
+      described_class.authorize(request)
+
+      expect(EndPointBlank::Rack::EnvStore.source_application_environment_id).to be_nil
+    end
+  end
+
   describe "caching an authorization" do
     it "does not ask intake again for an identical request" do
       described_class.authorize(request_double)
@@ -155,6 +196,31 @@ RSpec.describe EndPointBlank::Commands::EndpointAuthorize do
       cached = described_class.authorize(request_double)
 
       expect(JSON.parse(cached.body)["deprecation"]).to eq("deprecated_at" => "2026-01-01T00:00:00Z")
+    end
+
+    # Senior-dev review on PR #37, finding 2: the suite stayed at 0 failures
+    # with `record_source_application_environment_id(cached)` deleted from the
+    # cache-hit branch, so the PR's own claim -- that EndpointAuthorize records
+    # the source environment when it "receives OR REPLAYS a grant" -- had zero
+    # coverage for the replay half. This pins it: the id must come from the
+    # cache-hit branch itself, not from state a first call happened to leave
+    # behind, so EnvStore is cleared and re-set on a fresh (unseen) env between
+    # the two calls.
+    it "records the granted source environment on a cache hit, not just on the network call that populated it" do
+      first_request = request_double
+      EndPointBlank::Rack::EnvStore.set(first_request.env)
+      described_class.authorize(first_request)
+      expect(EndPointBlank::Rack::EnvStore.source_application_environment_id).to eq(42)
+
+      EndPointBlank::Rack::EnvStore.clear
+      second_request = request_double
+      EndPointBlank::Rack::EnvStore.set(second_request.env)
+      expect(EndPointBlank::Rack::EnvStore.source_application_environment_id).to be_nil
+
+      described_class.authorize(second_request)
+
+      expect(authorize_calls.size).to eq(1) # the second call was a cache hit, not a network round trip
+      expect(EndPointBlank::Rack::EnvStore.source_application_environment_id).to eq(42)
     end
 
     it "does not cache a refusal" do

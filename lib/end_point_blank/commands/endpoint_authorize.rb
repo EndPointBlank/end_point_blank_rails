@@ -81,13 +81,32 @@ module EndPointBlank
         private
 
         # Intake renders the grant under data[0]. The Rails controller also
-        # records this value, but the command is used directly by Rack and
-        # other integrations, so the command must carry the grant into the
-        # request store before any writer runs.
+        # records this value, but the command is also used directly (today,
+        # by end_point_blank_deploy's conformance driver), so the command must
+        # carry the grant into the request store before any writer runs.
         def record_source_application_environment_id(body)
           parsed = JSON.parse(body)
+          # A 201 whose body is valid JSON but not a Hash -- `[]`, `null`,
+          # `"x"` -- used to reach `dig` below and raise (TypeError for an
+          # Array, NoMethodError for nil or a String), turning a request
+          # intake had actually GRANTED into a crash for this direct-caller
+          # path. The other SDKs all guard the type before digging into the
+          # body (py: isinstance on both levels, js: optional chaining,
+          # elixir: pattern match with a fallback clause); this matches them.
+          unless parsed.is_a?(Hash)
+            EndPointBlank.logger.error(
+              "Authorized, but the response body did not parse to a JSON object, so this " \
+              "request's responses, logs and errors will not name their caller: body=#{body}"
+            )
+            return ::EndPointBlank::Rack::EnvStore.set_source_application_environment_id(nil)
+          end
+
           id = parsed.dig('data', 0, 'source_application_environment_id')
-          if id.nil? || id == ''
+          # An empty string is the same absence as a missing id -- do not
+          # record it, or the log line above claiming the caller "will not be
+          # named" is contradicted by the very next line.
+          id = nil if id == ''
+          if id.nil?
             EndPointBlank.logger.error(
               "Authorized, but the response has no data[0].source_application_environment_id, " \
               "so this request's responses, logs and errors will not name their caller: body=#{body}"
