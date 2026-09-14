@@ -5,6 +5,12 @@ require "singleton"
 module EndPointBlank
   module Commands
     # Thread-safe singleton cache for storing authentication credentials.
+    # It is scoped to a single Ruby process: there is nothing behind it but
+    # a plain Hash (no Rails.cache, Redis, or other shared store), so a
+    # Puma or Unicorn worker, and every separate app instance, each hold
+    # their own cache and their own view of cache_ttl. Nothing described
+    # below crosses a process boundary.
+    #
     # Capped at MAX_SIZE entries. When full, stale entries are evicted first;
     # if still at capacity, whichever remaining entry's recorded expires_at
     # is earliest is removed (see the note on make_room_for below -- that is
@@ -14,15 +20,24 @@ module EndPointBlank
     # AT READ TIME (sc-755), not just against the expiry computed when the
     # entry was written:
     #
-    #   - If cache_ttl is currently disabled (<= 0), the ENTIRE cache is
-    #     cleared -- every entry, not just the one looked up or being stored
-    #     -- on both a read and a store that observe the disabled state.
-    #     (Amended 2026-09-14: an earlier version of this cache deleted only
-    #     the single key being read, which let a *different* key go on
-    #     answering after cache_ttl was raised again -- a revoked grant could
-    #     resurrect. This matches the Elixir SDK's sc-660 `AuthCache.clear/0`,
-    #     which clears the whole ETS table on the disabled get/put path.)
-    #     Known residual, stated honestly rather than fixed here: a disable
+    #   - If cache_ttl is currently disabled (<= 0), the ENTIRE cache **in
+    #     this process** is cleared -- every entry, not just the one looked
+    #     up or being stored -- on both a read and a store that observe the
+    #     disabled state. (Amended 2026-09-14: an earlier version of this
+    #     cache deleted only the single key being read, which let a
+    #     *different* key go on answering after cache_ttl was raised again
+    #     -- a revoked grant could resurrect. This matches the Elixir SDK's
+    #     sc-660 `AuthCache.clear/0`, which clears the whole ETS table on
+    #     the disabled get/put path.)
+    #     Because each process's cache is independent, this does not reach
+    #     any other worker or instance: each one clears only when it has
+    #     itself observed cache_ttl disabled and then handled an Authorized
+    #     request (or a direct cache call) while disabled. A worker sitting
+    #     idle, or one that has not yet picked up the new config, keeps
+    #     serving whatever it already cached until it does -- nothing here
+    #     coordinates that across processes, and there is no fleet-wide
+    #     schedule for when, or whether, any given process's turn comes.
+    #     Known residual, left unaddressed here rather than fixed: a disable
     #     followed by a re-enable with **no cache read or store in between**
     #     flushes nothing, because nothing ever observed the disabled state
     #     to trigger the clear. This story does not add configure-time
@@ -40,9 +55,12 @@ module EndPointBlank
     # directly instead.
     #
     # cache_ttl must be a number. A nil cache_ttl is a configuration error,
-    # not a request to disable the cache: it raises (see current_ttl!)
-    # rather than being silently treated as "off", matching master's
-    # behavior of failing loudly on a nil TTL rather than changing it.
+    # not a request to disable the cache: it raises (see current_ttl!) on
+    # every cache read and store -- including a lookup that would otherwise
+    # be a plain miss -- rather than being silently treated as "off", so an
+    # Authorized request against a nil cache_ttl fails closed. This matches
+    # master's behavior of failing loudly on a nil TTL rather than changing
+    # it.
     class AuthenticationCache
       include Singleton
 
