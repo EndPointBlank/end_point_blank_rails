@@ -1,5 +1,58 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Runtime `cache_ttl` changes now apply to already-cached entries.**
+  `AuthenticationCache` used to fix an entry's expiry once, at the moment it
+  was stored; changing `cache_ttl` afterwards (typically to lower it during
+  an incident, hoping to make a revocation take effect sooner) did nothing to
+  entries already in the cache -- they kept answering until their *original*
+  expiry, on the *old* TTL. Setting `cache_ttl` to a disabling value (`<= 0`)
+  did nothing at all: it neither stopped new reads from being served nor
+  removed what was already cached.
+
+  Each entry now records its write time as well as its expiry, and every
+  read re-derives validity against the `cache_ttl` configured *at read time*,
+  anchored to that write time: an entry HITs only while it is within both its
+  original expiry (so raising `cache_ttl` never extends an entry already
+  cached) and the current `cache_ttl` measured from when it was written (so
+  lowering `cache_ttl` shortens an already-cached entry's life immediately,
+  on its next read).
+
+  A disabled `cache_ttl` now MISSes, and the moment a read *or a store*
+  observes the cache disabled, the **entire cache is cleared** -- not just
+  the entry being looked up or written. An earlier version of this fix
+  deleted only the single key involved, which let a *different*,
+  already-revoked key go on answering after `cache_ttl` was raised again.
+  This matches the Elixir SDK's existing `AuthCache.clear/0` behavior on its
+  disabled get/put path. A store made while the cache is disabled still
+  inserts nothing itself, on top of clearing what was already there.
+
+  **This cache is per Ruby process** -- a plain in-memory Hash, nothing
+  shared like `Rails.cache` or Redis -- so each Puma or Unicorn worker, and
+  every separate app instance, holds its own cache and its own view of
+  `cache_ttl`. "The entire cache is cleared" means *that process's* cache
+  only: disabling `cache_ttl` does not by itself reach any other worker or
+  instance, and each one clears its own cache only once it has itself
+  observed `cache_ttl` disabled and then handled an `Authorized` request
+  (or a direct cache call) while disabled. A worker sitting idle, or one
+  that hasn't yet picked up the new config, keeps answering from whatever
+  it already cached until it does. Known residual, left unaddressed here
+  rather than fixed: a disable followed by a re-enable with **no cache read
+  or store in between** flushes nothing, because nothing ever observed the
+  disabled state to trigger the clear; this release does not add
+  configure-time flushing.
+
+  `cache_ttl` must be a number: a `nil` `cache_ttl` raises (naming
+  `cache_ttl` in the message) on every cache read and store -- including a
+  lookup that would otherwise be a plain miss -- rather than being silently
+  treated as disabled, so an `Authorized` request against a nil `cache_ttl`
+  fails closed. This matches this SDK's existing behavior of failing loudly
+  on a nil TTL. Bringing `nil` in line with the other SDKs (which default
+  it) is left to a separate follow-up story.
+
 ## 0.10.0
 
 ### Fixed
