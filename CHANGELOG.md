@@ -19,9 +19,26 @@
   original expiry (so raising `cache_ttl` never extends an entry already
   cached) and the current `cache_ttl` measured from when it was written (so
   lowering `cache_ttl` shortens an already-cached entry's life immediately,
-  on its next read). A disabled `cache_ttl` now MISSes and deletes the entry
-  it finds -- rather than merely hiding it -- and a store made while the
-  cache is disabled inserts nothing.
+  on its next read).
+
+  A disabled `cache_ttl` now MISSes, and the moment a read *or a store*
+  observes the cache disabled, the **entire cache is cleared** -- not just
+  the entry being looked up or written. An earlier version of this fix
+  deleted only the single key involved, which let a *different*,
+  already-revoked key go on answering after `cache_ttl` was raised again.
+  This matches the Elixir SDK's existing `AuthCache.clear/0` behavior on its
+  disabled get/put path. Known, deliberately undocumented-no-further
+  residual: a disable followed by a re-enable with **no cache read or store
+  in between** flushes nothing, because nothing ever observed the disabled
+  state to trigger the clear; this release does not add configure-time
+  flushing. A store made while the cache is disabled still inserts nothing
+  itself, on top of clearing what was already there.
+
+  `cache_ttl` must be a number: a `nil` `cache_ttl` raises (naming
+  `cache_ttl` in the message) rather than being silently treated as
+  disabled, matching this SDK's existing behavior of failing loudly on a nil
+  TTL. Bringing `nil` in line with the other SDKs (which default it) is left
+  to a separate follow-up story.
 
 ## 0.10.0
 

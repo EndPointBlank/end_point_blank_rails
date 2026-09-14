@@ -68,21 +68,42 @@ RSpec.describe EndPointBlank::Commands::AuthenticationCache do
   end
 
   describe "expiry" do
+    # Storing with a disabled (<= 0) ttl inserts nothing (sc-755 rule 4), so
+    # these two need a genuinely positive ttl and an advanced clock -- with
+    # ttl -1, `store` never wrote an entry and both tests below passed
+    # without exercising anything.
     it "stops serving an entry once its TTL has passed" do
-      configuration.cache_ttl = -1
+      t0 = Time.now
+      allow(Time).to receive(:now).and_return(t0)
+      configuration.cache_ttl = 5
       cache.store("k", "credentials")
+
+      allow(Time).to receive(:now).and_return(t0 + 6)
 
       expect(cache.retrieve("k")).to be_nil
       expect(cache.exists?("k")).to be(false)
     end
 
-    it "makes room for new entries by dropping expired ones first" do
-      configuration.cache_ttl = -1
-      cache.store("stale", "old")
+    it "makes room for new entries by dropping entries that are stale under the CURRENT ttl first" do
+      t0 = Time.now
+      allow(Time).to receive(:now).and_return(t0)
       configuration.cache_ttl = 300
-      cache.store("fresh", "new")
+      cache.store("stale", "old")
 
-      expect(cache.keys).to eq(["fresh"])
+      # Lower the ttl and move past it: "stale" is now stale even though its
+      # own original (300s) expires_at is nowhere close -- so a capacity
+      # eviction driven only by "which expires_at is earliest" would never
+      # pick it, and would sacrifice a genuinely fresh entry instead. The
+      # store-time sweep has to re-check staleness against the current ttl,
+      # the same way a read would, not just skip already-expired entries.
+      configuration.cache_ttl = 10
+      allow(Time).to receive(:now).and_return(t0 + 11)
+      (described_class::MAX_SIZE - 1).times { |i| cache.store("key-#{i}", i) }
+
+      cache.store("newcomer", "new")
+
+      expect(cache.keys).not_to include("stale")
+      expect(cache.size).to eq(described_class::MAX_SIZE)
     end
   end
 
@@ -153,6 +174,108 @@ RSpec.describe EndPointBlank::Commands::AuthenticationCache do
       allow(Time).to receive(:now).and_return(t0 + 5)
 
       expect(cache.retrieve("k")).to eq("credentials")
+    end
+
+    # sc-755 rule 1 was amended 2026-09-14 (after js#50 review): a disabled
+    # read or store must clear the ENTIRE cache, not just the key it looked
+    # up or was about to write. A per-key-only delete let key B keep
+    # answering after `configure(0)` -> read A -> `configure(300)`, i.e. a
+    # revoked grant could resurrect. This matches Elixir sc-660's
+    # AuthCache.clear/0, which clears the whole table on the disabled
+    # get/put path. Known, documented residual: a disable -> re-enable with
+    # NO cache read or store in between flushes nothing, because nothing
+    # observes the disabled state to trigger the clear.
+    it "(d2) a disabled read of one key also clears every OTHER cached key, not just the one read" do
+      configuration.cache_ttl = 300
+      cache.store("a", "a-value")
+      cache.store("b", "b-value")
+
+      configuration.cache_ttl = -1
+      expect(cache.retrieve("a")).to be_nil
+      expect(cache.size).to eq(0)
+
+      configuration.cache_ttl = 300
+      expect(cache.retrieve("b")).to be_nil
+    end
+
+    it "a disabled read of a key that was never cached still clears everything else" do
+      configuration.cache_ttl = 300
+      cache.store("a", "a-value")
+      cache.store("b", "b-value")
+
+      configuration.cache_ttl = -1
+      expect(cache.retrieve("never-stored")).to be_nil
+      expect(cache.size).to eq(0)
+
+      configuration.cache_ttl = 300
+      expect(cache.retrieve("b")).to be_nil
+    end
+
+    it "a store that observes the cache disabled clears everything already cached, and stores nothing itself" do
+      configuration.cache_ttl = 300
+      cache.store("a", "a-value")
+      cache.store("b", "b-value")
+
+      configuration.cache_ttl = -1
+      cache.store("c", "c-value")
+
+      expect(cache.size).to eq(0)
+      expect(cache.exists?("c")).to be(false)
+
+      configuration.cache_ttl = 300
+      expect(cache.retrieve("b")).to be_nil
+    end
+
+    it "physically deletes a stale entry on an ordinary enabled read, not merely hides it" do
+      t0 = Time.now
+      allow(Time).to receive(:now).and_return(t0)
+      configuration.cache_ttl = 300
+      cache.store("k", "credentials")
+      cache.store("other", "value")
+
+      configuration.cache_ttl = 10
+      allow(Time).to receive(:now).and_return(t0 + 11)
+
+      expect(cache.retrieve("k")).to be_nil
+      expect(cache.keys).to eq(["other"])
+      expect(cache.size).to eq(1)
+    end
+
+    it "exists? applies the current ttl itself, not just what a prior retrieve already deleted" do
+      t0 = Time.now
+      allow(Time).to receive(:now).and_return(t0)
+      configuration.cache_ttl = 300
+      cache.store("k", "credentials")
+
+      configuration.cache_ttl = 10
+      allow(Time).to receive(:now).and_return(t0 + 11)
+
+      expect(cache.exists?("k")).to be(false)
+    end
+  end
+
+  describe "a nil cache_ttl" do
+    # The controller's ruling: this story must not silently change nil
+    # semantics. On master, a nil cache_ttl already failed loudly (a
+    # TypeError from `Time.now + nil` inside store). It must keep failing
+    # loudly and say so explicitly -- not be read as "disabled" now that
+    # every read, not just store, consults cache_ttl. Cross-SDK nil parity
+    # (JS/Java/Elixir default a nil ttl rather than raising) is a separate
+    # follow-up story; this SDK does not change its nil behavior here.
+    it "raises naming cache_ttl, rather than silently disabling the cache, on a store" do
+      configuration.cache_ttl = nil
+
+      expect { cache.store("k", "credentials") }.to raise_error(TypeError, /cache_ttl/)
+    end
+
+    it "raises naming cache_ttl, rather than silently disabling the cache, on a read" do
+      configuration.cache_ttl = 300
+      cache.store("k", "credentials")
+
+      configuration.cache_ttl = nil
+
+      expect { cache.retrieve("k") }.to raise_error(TypeError, /cache_ttl/)
+      expect { cache.exists?("k") }.to raise_error(TypeError, /cache_ttl/)
     end
   end
 
