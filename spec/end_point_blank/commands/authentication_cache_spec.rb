@@ -86,6 +86,76 @@ RSpec.describe EndPointBlank::Commands::AuthenticationCache do
     end
   end
 
+  describe "runtime cache_ttl changes (sc-755)" do
+    # Every case here re-evaluates validity against the cache_ttl configured
+    # AT READ TIME, anchored to when the entry was written -- never by
+    # comparing the entry's original expiry against the new ttl (that clamp
+    # arithmetic is the bug: an old entry's remaining-till-original-expiry can
+    # coincidentally fall under a new, shorter window and look valid again).
+
+    it "(a) shrinks an already-cached entry's life when ttl is lowered, once the new window elapses" do
+      t0 = Time.now
+      allow(Time).to receive(:now).and_return(t0)
+      configuration.cache_ttl = 300
+      cache.store("k", "credentials")
+
+      configuration.cache_ttl = 10
+      allow(Time).to receive(:now).and_return(t0 + 11)
+
+      expect(cache.retrieve("k")).to be_nil
+      expect(cache.exists?("k")).to be(false)
+    end
+
+    it "(b) MISSes even though the original (unlowered) expiry has not yet passed -- the clamp case" do
+      t0 = Time.now
+      allow(Time).to receive(:now).and_return(t0)
+      configuration.cache_ttl = 300
+      cache.store("k", "credentials")
+
+      configuration.cache_ttl = 10
+      # Only 5s "remaining" until the original 300s expiry -- a naive
+      # `remaining <= current_ttl` clamp would wrongly call this a HIT.
+      allow(Time).to receive(:now).and_return(t0 + 295)
+
+      expect(cache.retrieve("k")).to be_nil
+    end
+
+    it "(c) never extends an entry's life when ttl is raised after it was written" do
+      t0 = Time.now
+      allow(Time).to receive(:now).and_return(t0)
+      configuration.cache_ttl = 10
+      cache.store("k", "credentials")
+
+      configuration.cache_ttl = 300
+      allow(Time).to receive(:now).and_return(t0 + 11)
+
+      expect(cache.retrieve("k")).to be_nil
+    end
+
+    it "(d) disabling actually removes the entry, and re-enabling does not resurrect it" do
+      configuration.cache_ttl = 300
+      cache.store("k", "credentials")
+
+      configuration.cache_ttl = -1
+      expect(cache.retrieve("k")).to be_nil
+      expect(cache.size).to eq(0)
+
+      configuration.cache_ttl = 300
+      expect(cache.retrieve("k")).to be_nil
+    end
+
+    it "(e) still HITs when ttl is unchanged and the entry is within window" do
+      t0 = Time.now
+      allow(Time).to receive(:now).and_return(t0)
+      configuration.cache_ttl = 300
+      cache.store("k", "credentials")
+
+      allow(Time).to receive(:now).and_return(t0 + 5)
+
+      expect(cache.retrieve("k")).to eq("credentials")
+    end
+  end
+
   describe "removing" do
     it "forgets a single entry" do
       cache.store("a", 1)

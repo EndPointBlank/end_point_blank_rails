@@ -78,7 +78,7 @@ Every setting listed below can be set explicitly in that block, and most also fa
 | `logger` | — | A `::Logger.new($stdout, level: ::Logger::INFO)`, or `Rails.logger` under Rails (set by the railtie) | Any object with `.debug`/`.info`/`.warn`/`.error`/`.fatal` works. |
 | `worker_count` | — | `4` | Number of background threads draining the delayed writer's queue. Falls back to 2 when set to `nil`. |
 | `token_ttl` | — | `nil` | Optional TTL (seconds) requested when generating a `Bearer` access token. |
-| `cache_ttl` | — | `300` | TTL (seconds) for the authorization decision cache. |
+| `cache_ttl` | — | `300` | TTL (seconds) for the authorization decision cache. Changing it at runtime takes effect immediately for already-cached entries, not just new ones: an entry is valid only while it is within *both* its original write-time expiry and the *currently configured* `cache_ttl` measured from when it was written, so raising `cache_ttl` never extends an entry already in the cache, and lowering it shortens one on its next read. `cache_ttl <= 0` disables the cache — a disabled read deletes the entry it finds rather than merely ignoring it, and a store while disabled inserts nothing. |
 | `trust_proxy_headers` | — | `true` | Whether the per-request `scheme`/`host`/`port` report honors `X-Forwarded-Proto`/`-Host`/`-Port`. See [Reported base URL](#reported-base-url). |
 | `masking_rules` | — | `[]` | Ordered list of masking rule hashes — see [Data masking](#data-masking). |
 | `mask_hook` | — | `nil` | Optional `->(payload, record_type_string) { payload }` run after `masking_rules`. |

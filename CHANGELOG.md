@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Runtime `cache_ttl` changes now apply to already-cached entries.**
+  `AuthenticationCache` used to fix an entry's expiry once, at the moment it
+  was stored; changing `cache_ttl` afterwards (typically to lower it during
+  an incident, hoping to make a revocation take effect sooner) did nothing to
+  entries already in the cache -- they kept answering until their *original*
+  expiry, on the *old* TTL. Setting `cache_ttl` to a disabling value (`<= 0`)
+  did nothing at all: it neither stopped new reads from being served nor
+  removed what was already cached.
+
+  Each entry now records its write time as well as its expiry, and every
+  read re-derives validity against the `cache_ttl` configured *at read time*,
+  anchored to that write time: an entry HITs only while it is within both its
+  original expiry (so raising `cache_ttl` never extends an entry already
+  cached) and the current `cache_ttl` measured from when it was written (so
+  lowering `cache_ttl` shortens an already-cached entry's life immediately,
+  on its next read). A disabled `cache_ttl` now MISSes and deletes the entry
+  it finds -- rather than merely hiding it -- and a store made while the
+  cache is disabled inserts nothing.
+
 ## 0.10.0
 
 ### Fixed
