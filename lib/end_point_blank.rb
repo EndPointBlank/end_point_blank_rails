@@ -74,15 +74,17 @@ module EndPointBlank
   #
   # The yielded object (c, by convention) is valid only for the duration of
   # the block. Once configure returns -- whether the block returned
-  # normally or raised -- it is frozen, so a write made through a
-  # reference to it retained past the block raises FrozenError instead of
-  # silently going nowhere. Every field that gets committed is written as
-  # a fresh copy, not the candidate's own object (see
+  # normally or raised -- it is frozen, and every String, Array or Hash
+  # value it holds is first replaced with its own frozen deep copy (see
+  # {freeze_candidate}). A write made through a reference to it retained
+  # past the block always raises FrozenError: a reassignment
+  # (`saved.app_name = "x"`) because the candidate itself is frozen, and an
+  # in-place edit (`saved.masking_rules << rule`, `saved.app_name << "x"`,
+  # editing a rule Hash in place) because the value it points to is frozen
+  # too, not just the candidate. Every field that gets committed is also
+  # written as a fresh copy, not the candidate's own object (see
   # {apply_configure_changes}), so the live {Configuration} never ends up
-  # aliasing anything the candidate still holds; that closes the one case
-  # freezing the candidate itself doesn't cover, appending to an Array
-  # field it holds (`saved.masking_rules << rule` after the block), which
-  # only ever touches the frozen candidate's own, now-abandoned copy.
+  # aliasing anything the candidate still holds.
   #
   # Inside the block, a read that bypasses the block argument -- e.g.
   # Configuration.instance.app_name, or EndPointBlank.logger right after
@@ -104,12 +106,18 @@ module EndPointBlank
   # and the Hashes in it -- are deep-copied, so an in-place edit
   # (`c.masking_rules.first[:regex] << "|.*"`, `c.app_name << "-staging"`,
   # `c.masking_rules << rule`) changes only the block's copy, never the
-  # live value, unless and until that field is committed. Objects the
-  # caller owns and hands in by reference -- {Configuration#logger},
-  # {Configuration#mask_hook}, {Configuration#version_finder} -- are not
-  # String/Array/Hash, so they are copied by reference like any other
-  # field; EndPointBlank.configure cannot and does not roll back mutation
-  # the caller performs on those objects themselves.
+  # live value, unless and until that field is committed. Assigning one of
+  # these fields through c copies the assigned value too, rather than
+  # storing the object itself: after `c.masking_rules = rules`, mutating
+  # the `rules` array the caller passed in no longer reaches the live
+  # config, whether that mutation happens while the block is still running
+  # or afterward. Objects the caller owns and hands in by reference --
+  # {Configuration#logger}, {Configuration#mask_hook},
+  # {Configuration#version_finder} -- are not String/Array/Hash, so they
+  # are copied by reference like any other field, both while the block
+  # runs and afterward through a retained c; EndPointBlank.configure
+  # cannot and does not roll back mutation the caller performs on those
+  # objects themselves, whether through c or directly.
   #
   # This is generic over every field {Configuration} has now or gains
   # later (including a future sc-1265 cache_ttl upper bound): it copies
@@ -155,7 +163,7 @@ module EndPointBlank
       block.call(candidate)
       apply_configure_changes(config, original, candidate)
     ensure
-      candidate.freeze
+      freeze_candidate(candidate)
     end
   end
   private_class_method :configure_and_commit
@@ -192,6 +200,30 @@ module EndPointBlank
   end
   private_class_method :configure_deep_dup
 
+  # Recursively duplicates and freezes plain data (String, Array, Hash), the
+  # same shape {configure_deep_dup} walks. The copy is built first and
+  # frozen after, so this never freezes +value+ itself, only the new copy --
+  # a caller who still holds +value+ (e.g. the Array they passed to
+  # `c.masking_rules = rules`) keeps a fully mutable object; only the copy
+  # {freeze_candidate} puts on the frozen candidate is locked. Every other
+  # value -- Integer, Symbol, true/false/nil, and an object the caller owns
+  # and handed in by reference such as {Configuration#logger},
+  # {Configuration#mask_hook} or {Configuration#version_finder} -- is
+  # returned as-is, unfrozen, exactly as {configure_deep_dup} leaves it.
+  def self.configure_deep_freeze(value)
+    case value
+    when String then value.dup.freeze
+    when Array then value.map { |element| configure_deep_freeze(element) }.freeze
+    when Hash
+      value.each_with_object({}) do |(k, v), memo|
+        memo[configure_deep_freeze(k)] = configure_deep_freeze(v)
+      end.freeze
+    else
+      value
+    end
+  end
+  private_class_method :configure_deep_freeze
+
   # Builds the detached copy {EndPointBlank.configure} yields to its block:
   # a bare {Configuration} instance -- built with
   # `Configuration.send(:allocate)` since {Configuration} is a Singleton
@@ -205,6 +237,29 @@ module EndPointBlank
     candidate
   end
   private_class_method :configure_candidate_for
+
+  # Locks down +candidate+ once the block is done with it (see
+  # {configure_and_commit}). Freezing +candidate+ alone only blocks a
+  # *reassignment* through a reference to it retained past the block
+  # (`saved.app_name = "x"`); it does nothing to the Array, Hash or String
+  # objects its ivars point to, so an in-place edit through that same
+  # reference (`saved.masking_rules << rule`, `saved.app_name << "x"`,
+  # editing a rule Hash in place) would return normally and silently never
+  # reach the live config -- the same failure {apply_configure_changes}
+  # committing a fresh copy already prevents, one level down. Each ivar is
+  # therefore replaced with its own {configure_deep_freeze} copy before
+  # +candidate+ itself is frozen, so every one of those in-place edits
+  # raises FrozenError too. This replaces the ivar's value on +candidate+,
+  # not on the value itself: the object the caller handed to +candidate+
+  # (e.g. via `c.masking_rules = rules`) is never frozen in place, so it
+  # stays fully mutable for the caller's own further use.
+  def self.freeze_candidate(candidate)
+    candidate.instance_variables.each do |ivar|
+      candidate.instance_variable_set(ivar, configure_deep_freeze(candidate.instance_variable_get(ivar)))
+    end
+    candidate.freeze
+  end
+  private_class_method :freeze_candidate
 
   # Writes onto the live +config+ only the ivars whose value on +candidate+
   # differs from +original+, the independent deep copy taken before the

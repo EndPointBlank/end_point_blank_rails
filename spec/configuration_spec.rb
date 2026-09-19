@@ -610,27 +610,33 @@ RSpec.describe EndPointBlank::Configuration do
     end
 
     # Freezing the yielded object only stops a *reassignment* through it
-    # (app_name = ...); it does not freeze the Array a field like
-    # masking_rules holds, so `saved.masking_rules << rule` does not raise.
-    # Before this fix, apply_configure_changes committed the candidate's
-    # own Array object, so it was literally the same object as the live
-    # config's after a commit, and a later append through the retained
-    # candidate reached the live config directly -- bypassing the Mutex and
-    # any validation entirely. Committing a fresh copy of the value, not
-    # the candidate's own object, means that append only ever touches the
-    # frozen candidate's own, now-abandoned copy.
-    it "does not let an append through the yielded object, made after configure returns, reach masking_rules" do
+    # (app_name = ...); on its own that would not freeze the Array a field
+    # like masking_rules holds, so an in-place edit through a retained
+    # reference (append, editing a rule Hash, `<<` on a String field) would
+    # return normally and just never reach the live config -- the same
+    # silent-no-op shape as a reassignment through a stale reference before
+    # candidate.freeze existed at all, one level down. Every String, Array
+    # or Hash ivar on the candidate is replaced with its own frozen deep
+    # copy before candidate.freeze runs (see freeze_candidate and
+    # configure_deep_freeze), so each of those in-place edits raises
+    # FrozenError too, not just a reassignment -- and, since the raise
+    # happens before any mutation, the live config is left exactly as the
+    # block committed it.
+    it "raises FrozenError for an in-place edit through the yielded object, made after configure returns" do
       configuration.masking_rules = []
       saved = nil
 
       EndPointBlank.configure do |c|
-        c.masking_rules << { target: "from-block" }
+        c.masking_rules << { target: "from-block", regex: +"\\d{4}" }
+        c.app_name = +"boot"
         saved = c
       end
 
-      saved.masking_rules << { target: "from-after" }
-
-      expect(configuration.masking_rules.map { |rule| rule[:target] }).to eq(["from-block"])
+      expect { saved.masking_rules << { target: "from-after" } }.to raise_error(FrozenError)
+      expect { saved.app_name << "-late" }.to raise_error(FrozenError)
+      expect { saved.masking_rules.first[:regex] = "changed" }.to raise_error(FrozenError)
+      expect(configuration.masking_rules).to eq([{ target: "from-block", regex: "\\d{4}" }])
+      expect(configuration.app_name).to eq("boot")
     end
 
     # apply_configure_changes commits whatever public_instance_methods

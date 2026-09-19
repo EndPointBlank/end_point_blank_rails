@@ -53,21 +53,30 @@
 
   The copy `configure` yields (`c`, by convention) is only valid for the
   duration of the block: once `configure` returns, whether the block
-  returned normally or raised, `c` is frozen, so a write made through a
-  reference to it retained past the block raises `FrozenError` instead of
-  silently going nowhere. Every field that gets committed is also now
-  written as a fresh copy, not `c`'s own object, so the live
-  `Configuration` never ends up aliasing anything `c` still holds -- that
-  closes the one case freezing `c` itself doesn't cover: appending to an
-  Array or Hash field it holds (e.g. `saved.masking_rules << rule` after
-  the block) previously reached the live value directly once that field
-  had been committed, since the candidate and the live config ended up
-  holding the very same object, bypassing the Mutex and any validation
-  with no error. A read that bypasses `c` -- `Configuration.instance.app_name`,
-  or `EndPointBlank.logger` right after `c.logger = ...` earlier in the
-  same block -- still sees the value from before the call started, not
-  what the block has set on `c` so far, until the block returns and the
-  commit runs.
+  returned normally or raised, `c` is frozen, and every String, Array or
+  Hash value it holds is first replaced with its own frozen deep copy. A
+  write made through a reference to `c` retained past the block now always
+  raises `FrozenError` -- a reassignment (`saved.app_name = "x"`) because
+  `c` itself is frozen, and an in-place edit (`saved.masking_rules << rule`,
+  `saved.app_name << "x"`, editing a rule Hash in place) because the value
+  it points to is frozen too, not just `c`. A read that bypasses `c` --
+  `Configuration.instance.app_name`, or `EndPointBlank.logger` right after
+  `c.logger = ...` earlier in the same block -- still sees the value from
+  before the call started, not what the block has set on `c` so far, until
+  the block returns and the commit runs.
+
+  Assigning a String, Array or Hash through `c` now copies it, rather than
+  storing the object itself: `rules = [...]; EndPointBlank.configure { |c|
+  c.masking_rules = rules }; rules << extra` no longer affects the live
+  configuration, whereas on 0.11.0 it did, because `c` was the live
+  singleton and `masking_rules` held that very same array. Call `configure`
+  again to apply a further change. Objects the caller hands in by
+  reference that are not String/Array/Hash -- `logger`, `mask_hook`,
+  `version_finder` -- are unaffected by any of this: they are held by
+  reference, not copied, both during the block and after it returns, so
+  mutating one through a retained `c` (`saved.logger.level = ...`) still
+  reaches the live value, the same as mutating it through
+  `EndPointBlank.logger` or `Configuration.instance.logger` directly would.
 
   This is generic over every `Configuration` instance variable, not a
   hand-maintained field list, so a future validated field (e.g. sc-1265's

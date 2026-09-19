@@ -68,12 +68,23 @@ Every setting listed below can be set explicitly in that block, and most also fa
 `ENDPOINTBLANK_*` environment variable, then to a built-in default.
 
 `c` is only valid for the duration of the block: once `configure` returns, whether the block
-returned normally or raised, `c` is frozen, so a write made through a reference to it kept past
-the block raises `FrozenError` instead of silently going nowhere. A read that bypasses `c` --
-`EndPointBlank::Configuration.instance.app_name`, or `EndPointBlank.logger` right after
-`c.logger = ...` earlier in the same block -- still sees the value from before the `configure`
-call started, not what the block has set on `c` so far, until the block returns and the change
-is applied.
+returned normally or raised, `c` is frozen, and every String, Array or Hash value it holds is
+first replaced with its own frozen deep copy. A write made through a reference to `c` kept past
+the block always raises `FrozenError` -- a reassignment (`saved.app_name = "x"`) because `c`
+itself is frozen, and an in-place edit (`saved.masking_rules << rule`, `saved.app_name << "x"`,
+editing a rule Hash in place) because the value it points to is frozen too, not just `c`. A read
+that bypasses `c` -- `EndPointBlank::Configuration.instance.app_name`, or `EndPointBlank.logger`
+right after `c.logger = ...` earlier in the same block -- still sees the value from before the
+`configure` call started, not what the block has set on `c` so far, until the block returns and
+the change is applied.
+
+Assigning a String, Array or Hash through `c` copies it rather than storing the object itself:
+after `c.masking_rules = rules`, mutating the `rules` array you passed in no longer affects the
+live configuration -- call `configure` again to apply a further change. `logger`, `mask_hook`
+and `version_finder` are not String/Array/Hash, so they are held by reference like any other
+object the caller hands in: mutating one through a retained `c` (`saved.logger.level = ...`)
+still reaches the live value, the same as mutating it through `EndPointBlank.logger` or
+`Configuration.instance.logger` directly would.
 
 **Precedence: explicit `configure` value > `ENDPOINTBLANK_*` environment variable > default.**
 
