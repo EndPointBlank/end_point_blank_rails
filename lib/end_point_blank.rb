@@ -86,7 +86,10 @@ module EndPointBlank
   # whether the first succeeded or raised. The lock only orders
   # configure-against-configure; a reader elsewhere that is not going
   # through configure can still observe the commit loop's writes one field
-  # at a time while it runs.
+  # at a time while it runs. Because Ruby's Mutex is not reentrant, calling
+  # EndPointBlank.configure again from inside a configure block -- on the
+  # same thread -- raises ThreadError instead of running; configure blocks
+  # are not meant to nest.
   #
   # @raise whatever the block raises; the live configuration is left
   #   exactly as it was before the call
