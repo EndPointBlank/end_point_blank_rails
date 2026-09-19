@@ -35,9 +35,14 @@
   copy was made.
 
   `configure` calls are also now serialized with a Mutex held across the
-  block and the commit, so two calls that both succeed and both set the
-  same field can no longer race each other and have the one that finishes
-  committing last silently discard the other's write. Because Ruby's
+  block and the commit, so two calls can no longer overlap. Without that,
+  two calls that both succeed could still overlap -- the second starting
+  while the first is still running -- and both would build their copy from
+  the same starting snapshot. Whichever finished last would still decide
+  what to write by comparing its own copy against that same now-stale
+  snapshot rather than against whatever was live on `Configuration` by the
+  time it actually committed, so it would silently write its own change
+  over whatever the other call had already committed. Because Ruby's
   `Mutex` is not reentrant, calling `configure` again from inside a
   `configure` block, on the same thread, now raises `EndPointBlank::Error`
   instead of running -- previously, with no atomicity in place at all,

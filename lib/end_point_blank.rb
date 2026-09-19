@@ -44,11 +44,17 @@ end
 module EndPointBlank
   class Error < StandardError; end
 
-  # Serializes {EndPointBlank.configure} calls. Without this, two successful
-  # calls racing each other could each copy the same starting state, and
-  # whichever finished committing last would write back its own stale copy
-  # of a field the other call had just changed, discarding that change with
-  # no error. See {EndPointBlank.configure}.
+  # Serializes {EndPointBlank.configure} calls end to end -- both the block
+  # and the commit -- so two calls can never overlap. Without this, two
+  # calls that both succeed could overlap: the second one can start while
+  # the first is still running, so both build their candidate from the same
+  # starting snapshot. Whichever one finishes last still decides what to
+  # write by diffing its own candidate against that same snapshot, not
+  # against whatever {Configuration} holds live by the time it actually
+  # commits (see {apply_configure_changes}) -- so its own change still looks
+  # like a change relative to its now-stale snapshot, and it writes that
+  # value over whatever the other call already committed, with no error.
+  # See {EndPointBlank.configure}.
   @configure_mutex = Mutex.new
 
   # Applies a block of configuration changes to the shared {Configuration}

@@ -437,8 +437,19 @@ RSpec.describe EndPointBlank::Configuration do
     # they live in -- otherwise a block that never gets to commit can still
     # mutate the live configuration directly through a shared String, before
     # the block even returns.
+    #
+    # The fixture strings below are built with unary `+` rather than plain
+    # literals. This file has `# frozen_string_literal: true`, so a plain
+    # literal is frozen, and `<<` on a frozen String raises FrozenError
+    # immediately -- which would make this spec fail even against
+    # insufficiently-copied code, just for the wrong reason (a frozen
+    # literal, not the leak this spec exists to catch), and pass trivially
+    # once copying is deep enough only because the mutation could no longer
+    # be attempted at all. `+"..."` gives a real, unfrozen String, the way a
+    # caller's own value normally arrives, so the mutation actually happens
+    # and the assertion below is exercising the leak itself.
     it "does not keep an in-place edit to a masking rule hash's value when a later field in the same call is invalid" do
-      configuration.masking_rules = [{ target: "error_message", regex: "\\d{4}", replacement_value: "****" }]
+      configuration.masking_rules = [{ target: "error_message", regex: +"\\d{4}", replacement_value: "****" }]
 
       expect do
         EndPointBlank.configure do |c|
@@ -453,7 +464,7 @@ RSpec.describe EndPointBlank::Configuration do
     end
 
     it "does not keep an in-place edit to a String field when a later field in the same call is invalid" do
-      configuration.app_name = "original-app-name"
+      configuration.app_name = +"original-app-name"
 
       expect do
         EndPointBlank.configure do |c|
@@ -501,6 +512,52 @@ RSpec.describe EndPointBlank::Configuration do
       thread.join
 
       expect(configuration.cache_ttl).to eq(0)
+    end
+
+    # Ruby's Mutex is not reentrant: without the explicit owned? guard at the
+    # top of EndPointBlank.configure, a block that calls configure again on
+    # the same thread would hit @configure_mutex#synchronize while that same
+    # thread already holds it, which MRI detects as a deadlock and raises a
+    # bare ThreadError -- not this error, and not this message.
+    it "raises when configure is called again from inside a configure block on the same thread" do
+      expect do
+        EndPointBlank.configure do |_outer|
+          EndPointBlank.configure { |inner| inner.client_id = "nested" }
+        end
+      end.to raise_error(EndPointBlank::Error, "EndPointBlank.configure cannot be called from inside a configure block")
+    end
+
+    # Same shape as the client_id overlap spec above, but appending to an
+    # Array field instead of reassigning a scalar one, so it also exercises
+    # apply_configure_changes's diff check on an Array value. Thread A
+    # appends and pauses mid-block; thread B's independent call runs to
+    # completion (start to commit) entirely inside that pause. With the
+    # lock, B cannot start until A's call has fully released the mutex, so
+    # B's own snapshot is taken *after* A's commit and already contains A's
+    # rule; B commits on top of it and both rules survive. Without it, B
+    # starts while A is still paused, so B's snapshot is taken before A's
+    # rule exists; B commits its own array first, and A's eventual commit
+    # -- still comparing against the snapshot it took before B ever ran --
+    # overwrites B's array with its own, losing B's rule.
+    it "does not lose one of two overlapping successful configure calls that both append a masking rule" do
+      configuration.masking_rules = []
+      paused = Queue.new
+
+      thread_a = Thread.new do
+        EndPointBlank.configure do |c|
+          c.masking_rules << { target: "from_a" }
+          paused << true
+          sleep 0.3
+        end
+      end
+
+      paused.pop
+      thread_b = Thread.new { EndPointBlank.configure { |c| c.masking_rules << { target: "from_b" } } }
+
+      thread_a.join
+      thread_b.join
+
+      expect(configuration.masking_rules.map { |rule| rule[:target] }).to contain_exactly("from_a", "from_b")
     end
   end
 end
