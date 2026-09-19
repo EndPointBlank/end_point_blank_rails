@@ -18,27 +18,44 @@
   # app_name was left as "checkout" -- half-updated, with no error saying so
   ```
 
-  `configure` now yields a detached copy of the configuration and only
-  applies it to the live singleton once the block returns normally, so a
-  rejected call leaves the live configuration exactly as it was -- nothing
-  it touched is kept, including a field set for the very first time (e.g.
-  `client_id` on a fresh boot, before anything has ever assigned it) and an
-  in-place edit of `masking_rules` (its array and each rule Hash in it are
-  duplicated into the copy). This holds for *any* exception the block
-  raises, not only `StandardError`. `configure` calls are also now
-  serialized with a Mutex held across the block and the commit, so a
-  `configure` call that is going to fail can no longer race a concurrent
-  call that succeeds and undo its commit.
+  `configure` now yields a detached copy of the configuration, and once the
+  block returns normally, writes back only the fields whose value on that
+  copy differs from an independent deep copy taken before the block ran --
+  so a rejected call leaves the live configuration exactly as it was,
+  including a field set for the very first time (e.g. `client_id` on a
+  fresh boot, before anything has ever assigned it) and an in-place edit
+  anywhere in a String, Array or Hash field (both `masking_rules` and the
+  rule Hashes in it, and a String field such as `app_name` edited with
+  `<<`, are deep-copied into the block's copy). This holds for *any*
+  exception the block raises, not only `StandardError`. Committing only
+  what the block changed, rather than every field, also means a write to a
+  field the block never touched -- made from inside the block itself (e.g.
+  `EndPointBlank.logger =`) or concurrently from another thread outside
+  `configure` -- is no longer silently reset back to what it was when the
+  copy was made.
+
+  `configure` calls are also now serialized with a Mutex held across the
+  block and the commit, so two calls that both succeed and both set the
+  same field can no longer race each other and have the one that finishes
+  committing last silently discard the other's write. Because Ruby's
+  `Mutex` is not reentrant, calling `configure` again from inside a
+  `configure` block, on the same thread, now raises `EndPointBlank::Error`
+  instead of running -- previously, with no atomicity in place at all,
+  nesting worked by accident, since both calls just mutated the live
+  singleton directly. A block that starts a different thread, has it call
+  `configure`, and then joins it will hang instead of raising, since that
+  thread is genuinely waiting on a lock this thread holds.
 
   This is generic over every `Configuration` instance variable, not a
   hand-maintained field list, so a future validated field (e.g. sc-1265's
   planned `cache_ttl` upper bound) is atomic under `configure`
   automatically, with no changes needed here. Objects the caller hands in
   by reference -- `logger`, `mask_hook`, `version_finder` -- are copied by
-  reference like any other field; `configure` cannot roll back mutation the
-  caller performs on those objects themselves, and calling `configure` from
-  more than one thread only serializes calls to `configure` itself, not
-  reads of `Configuration` elsewhere.
+  reference like any other field, not deep-copied, since they are not
+  String/Array/Hash; `configure` cannot roll back mutation the caller
+  performs on those objects themselves, and calling `configure` from more
+  than one thread only serializes calls to `configure` itself, not reads of
+  `Configuration` elsewhere.
 
   This is sc-1266. Of the other four EndPointBlank SDKs, only Java (`java#39`)
   had this bug and needed a code fix; JS, Python and Elixir were already

@@ -258,9 +258,14 @@ RSpec.describe EndPointBlank::Configuration do
       # the example would be a no-op and would leak the mutation into every
       # test that runs after it.
       original_masking_rules = configuration.instance_variable_get(:@masking_rules).map(&:dup)
+      # logger isn't in CONFIGURATION_SPEC_IVARS (see spec/logger_spec.rb for
+      # the same local save/restore, used there for the same reason): the
+      # examples below assign it directly, outside of configure.
+      original_logger = configuration.logger
       example.run
       configuration.instance_variable_set(:@cache_ttl, original_cache_ttl)
       configuration.instance_variable_set(:@masking_rules, original_masking_rules)
+      configuration.logger = original_logger
     end
 
     it "does not apply a valid field when a later field in the same call is invalid" do
@@ -350,18 +355,18 @@ RSpec.describe EndPointBlank::Configuration do
       expect(configuration.app_name).to eq("original-app-name")
     end
 
-    # sc-1266: copy-then-commit makes a single call atomic, but two
-    # overlapping calls both start from the same live state, and without
-    # serialization whichever finishes committing last wins -- even when it
-    # is a call that was always going to fail. Against a rollback-in-place
-    # implementation with no lock, this reproduces that directly: thread A
-    # applies its field straight to the live singleton, pauses, thread B's
-    # independent, valid call commits "b-value" to the live singleton while
-    # A is paused, and then A's rollback restores A's own stale pre-call
-    # snapshot over the top of B's commit. The Mutex closes this by holding
-    # the lock across the block *and* the commit, so thread B cannot even
-    # start running its own block until thread A's call -- raise included --
-    # has fully released the lock.
+    # Copy-then-commit means a call that raises never reaches the commit
+    # step at all, whether or not the Mutex is held: thread A's
+    # `cache_ttl = -1` makes A's own block raise before
+    # apply_configure_changes ever runs for A, so there is nothing for the
+    # Mutex to protect A's (never-attempted) commit from. This spec pins
+    # that directly: thread B's independent, valid call commits "b-value"
+    # while A is paused inside its own block, and A's failure afterward has
+    # no effect on B's committed value. It does not exercise the Mutex --
+    # removing `synchronize` here still leaves this example green, since A
+    # simply never gets as far as writing anything. The Mutex's own
+    # necessity -- two calls that both succeed, racing on the same field --
+    # is covered separately below.
     it "does not let a failing configure call on one thread affect a successful concurrent call on another" do
       configuration.app_name = "original-app-name"
       paused = Queue.new
@@ -389,6 +394,113 @@ RSpec.describe EndPointBlank::Configuration do
 
       expect(thread_a_error).to be_a(ArgumentError)
       expect(configuration.app_name).to eq("b-value")
+    end
+
+    # Two configure calls that both succeed and both set the same field are
+    # where the Mutex actually earns its keep. Selective, diff-based commit
+    # (see EndPointBlank.apply_configure_changes) means two successful calls
+    # touching *different* fields never clobber each other even without the
+    # lock, so that shape can't tell the Mutex apart from no Mutex at all --
+    # this one has to use the same field on purpose. Thread A starts first,
+    # is paused mid-block, and B runs to completion (start to commit) while
+    # A is still paused; A resumes and commits afterward. With the lock, B
+    # cannot even start its own block until A's call -- pause and all -- has
+    # fully released the mutex, so the two never overlap and the one that
+    # runs second (B) wins, as expected. Without it, B runs and commits
+    # entirely inside A's pause, and A's eventual commit is still comparing
+    # against the snapshot it took *before* B ran, sees its own "from-a" as
+    # changed relative to that stale snapshot, and writes it over B's
+    # already-committed "from-b".
+    it "does not lose one of two overlapping successful configure calls that set the same field" do
+      configuration.client_id = "original-client-id"
+      paused = Queue.new
+
+      thread_a = Thread.new do
+        EndPointBlank.configure do |c|
+          c.client_id = "from-a"
+          paused << true
+          sleep 0.3
+        end
+      end
+
+      paused.pop
+      thread_b = Thread.new { EndPointBlank.configure { |c| c.client_id = "from-b" } }
+
+      thread_a.join
+      thread_b.join
+
+      expect(configuration.client_id).to eq("from-b")
+    end
+
+    # masking_rules holding a rule Hash's String value, and a String field
+    # itself, both need copying by value, not just the top-level Array/Hash
+    # they live in -- otherwise a block that never gets to commit can still
+    # mutate the live configuration directly through a shared String, before
+    # the block even returns.
+    it "does not keep an in-place edit to a masking rule hash's value when a later field in the same call is invalid" do
+      configuration.masking_rules = [{ target: "error_message", regex: "\\d{4}", replacement_value: "****" }]
+
+      expect do
+        EndPointBlank.configure do |c|
+          c.masking_rules.first[:regex] << "|.*"
+          c.cache_ttl = -1
+        end
+      end.to raise_error(ArgumentError)
+
+      expect(configuration.masking_rules).to eq(
+        [{ target: "error_message", regex: "\\d{4}", replacement_value: "****" }]
+      )
+    end
+
+    it "does not keep an in-place edit to a String field when a later field in the same call is invalid" do
+      configuration.app_name = "original-app-name"
+
+      expect do
+        EndPointBlank.configure do |c|
+          c.app_name << "-staging"
+          c.cache_ttl = -1
+        end
+      end.to raise_error(ArgumentError)
+
+      expect(configuration.app_name).to eq("original-app-name")
+    end
+
+    # A successful call should only commit the fields its block actually set
+    # through its block argument -- not every field the copy started with --
+    # so that a write to a field the block never touched, made by something
+    # other than that block while it was running, is still there afterward
+    # instead of being silently reset back to what it was when the copy was
+    # made.
+    it "keeps a direct write to a field the block never touched, made from inside the block itself" do
+      new_logger = Logger.new(IO::NULL)
+
+      EndPointBlank.configure do |c|
+        c.app_name = "new-app-name"
+        EndPointBlank.logger = new_logger
+      end
+
+      expect(configuration.logger).to be(new_logger)
+    end
+
+    it "keeps a concurrent direct write to a field the block never touched, made from another thread" do
+      configuration.cache_ttl = 60
+      paused = Queue.new
+      resume = Queue.new
+
+      thread = Thread.new do
+        EndPointBlank.configure do |c|
+          c.app_name = "new-app-name"
+          paused << true
+          resume.pop
+        end
+      end
+
+      paused.pop
+      configuration.cache_ttl = 0
+      resume << true
+      thread.join
+
+      expect(configuration.cache_ttl).to eq(0)
     end
   end
 end
