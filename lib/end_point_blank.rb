@@ -44,9 +44,34 @@ end
 module EndPointBlank
   class Error < StandardError; end
 
-  # Your code goes here...
+  # Applies a block of configuration changes to the shared {Configuration}
+  # instance atomically: either every assignment in the block succeeds, or
+  # none of them are kept.
+  #
+  # Each setter runs against the live singleton as the block executes, so a
+  # validating setter (like {Configuration#cache_ttl=}) can raise partway
+  # through a multi-field block. Before yielding, every current value is
+  # snapshotted; if the block raises, every value is restored to its
+  # snapshot before the error propagates, so a call that sets several
+  # fields and then fails validation on one of them leaves the
+  # configuration exactly as it was before the call -- not half-updated.
+  #
+  # This is generic over every field {Configuration} has now or gains later
+  # (including a future sc-1265 cache_ttl upper bound): it snapshots and
+  # restores every instance variable, so no new setter needs to be added
+  # here for its validation to be atomic.
+  #
+  # @raise whatever the block raises, after rolling back
   def self.configure(&block)
-    yield Configuration.instance
+    config = Configuration.instance
+    snapshot = config.instance_variables.each_with_object({}) do |ivar, memo|
+      memo[ivar] = config.instance_variable_get(ivar)
+    end
+
+    yield config
+  rescue StandardError
+    snapshot.each { |ivar, value| config.instance_variable_set(ivar, value) }
+    raise
   end
 
   # Defaults to stderr, not stdout. This logger belongs to a library running

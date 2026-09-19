@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.11.1
+
+### Fixed
+
+- **`EndPointBlank.configure` is now all-or-nothing.** The sc-970 review
+  found that this SDK (along with Java) applied a `configure` block's
+  assignments to the live `Configuration` singleton as the block executed,
+  so a field set *before* a later one failed validation stayed applied even
+  though the whole call raised:
+
+  ```ruby
+  EndPointBlank.configure do |c|
+    c.app_name = "checkout"  # applied immediately
+    c.cache_ttl = -1         # raises ArgumentError here
+  end
+  # app_name was left as "checkout" -- half-updated, with no error saying so
+  ```
+
+  `configure` now snapshots every field before yielding and, if the block
+  raises, restores every field to its pre-call value before re-raising. A
+  rejected call now leaves the configuration exactly as it was -- nothing
+  it touched is kept. This is sc-1266, the same fix and the same test
+  shape in all five EndPointBlank SDKs.
+
+  The snapshot/restore is generic over every `Configuration` instance
+  variable, not a hand-maintained field list, so a future validated field
+  (e.g. sc-1265's planned `cache_ttl` upper bound) is atomic under
+  `configure` automatically, with no changes needed here.
+
 ## 0.11.0
 
 ### Breaking

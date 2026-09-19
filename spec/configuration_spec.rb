@@ -241,5 +241,49 @@ RSpec.describe EndPointBlank::Configuration do
       end
     end
   end
+
+  # sc-1266: the sc-970 reviews found that this SDK's configure block applied
+  # each assignment to the live singleton as the block executed, so a field
+  # set before an invalid one stuck even though the whole call raised. This
+  # pins the fix as all-or-nothing: nothing a rejected `configure` call
+  # touched may differ from before the call, proven here by mutating a field
+  # that has no validation of its own (app_name) alongside one that does
+  # (cache_ttl).
+  describe ".configure" do
+    around do |example|
+      original_cache_ttl = configuration.instance_variable_get(:@cache_ttl)
+      example.run
+      configuration.instance_variable_set(:@cache_ttl, original_cache_ttl)
+    end
+
+    it "does not apply a valid field when a later field in the same call is invalid" do
+      configuration.app_name = "original-app-name"
+
+      expect do
+        EndPointBlank.configure do |c|
+          c.app_name = "new-app-name"
+          c.cache_ttl = -1
+        end
+      end.to raise_error(ArgumentError)
+
+      expect(configuration.app_name).to eq("original-app-name")
+    end
+
+    it "does not apply any of several valid fields set before the invalid one that raises" do
+      configuration.app_name = "original-app-name"
+      configuration.client_id = "original-client-id"
+
+      expect do
+        EndPointBlank.configure do |c|
+          c.app_name = "new-app-name"
+          c.client_id = "new-client-id"
+          c.cache_ttl = -1
+        end
+      end.to raise_error(ArgumentError)
+
+      expect(configuration.app_name).to eq("original-app-name")
+      expect(configuration.client_id).to eq("original-client-id")
+    end
+  end
 end
 # rubocop:enable Metrics/BlockLength
