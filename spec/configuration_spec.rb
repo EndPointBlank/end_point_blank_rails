@@ -639,6 +639,59 @@ RSpec.describe EndPointBlank::Configuration do
       expect(configuration.app_name).to eq("boot")
     end
 
+    # Assigning a String, Array or Hash through c (c.masking_rules = mine)
+    # commits a deep copy of that value, not the caller's own object
+    # (apply_configure_changes commits configure_deep_dup(value)) -- so once
+    # configure returns, the live config no longer shares any object with
+    # whatever the caller handed to c, and mutating that object further
+    # (append, edit a nested rule Hash, << on a String) has no effect on the
+    # live config. freeze_candidate then deep-freezes a *copy* of each
+    # candidate ivar (see configure_deep_freeze), not the candidate's ivar
+    # in place, so the caller's own object is left exactly as mutable as it
+    # always was.
+    it "copies a caller-owned Array and String assigned through c, leaving live config unaffected by later mutation" do
+      mine = [{ target: "from-caller", regex: +"\\d{4}" }]
+      name = +"caller-owned"
+
+      EndPointBlank.configure do |c|
+        c.masking_rules = mine
+        c.app_name = name
+      end
+
+      mine << { target: "added-after" }
+      mine.first[:regex] = "changed-after"
+      name << "-mutated"
+
+      expect(configuration.masking_rules).to eq([{ target: "from-caller", regex: "\\d{4}" }])
+      expect(configuration.app_name).to eq("caller-owned")
+      expect(mine).not_to be_frozen
+      expect(mine.first).not_to be_frozen
+      expect(name).not_to be_frozen
+    end
+
+    # freeze_candidate runs in configure_and_commit's ensure, so it runs
+    # whether the block succeeded or raised. A block that assigns a
+    # caller-owned Array/String through c and then raises still reaches
+    # freeze_candidate on the way out -- that must deep-freeze a copy of the
+    # abandoned candidate's own ivar, not the caller's object itself, the
+    # same as on the success path above.
+    it "leaves a caller-owned Array and String unfrozen when the block raises after assigning them through c" do
+      mine = [{ target: "from-caller", regex: +"\\d{4}" }]
+      name = +"caller-owned"
+
+      expect do
+        EndPointBlank.configure do |c|
+          c.masking_rules = mine
+          c.app_name = name
+          c.cache_ttl = -1
+        end
+      end.to raise_error(ArgumentError)
+
+      expect(mine).not_to be_frozen
+      expect(mine.first).not_to be_frozen
+      expect(name).not_to be_frozen
+    end
+
     # apply_configure_changes commits whatever public_instance_methods
     # Configuration happens to have, generically -- there is no
     # per-field list to keep in sync. That is also exactly what makes it

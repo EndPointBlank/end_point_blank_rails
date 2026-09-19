@@ -268,12 +268,14 @@ module EndPointBlank
   # running. Only reached after the block has returned normally.
   #
   # Commits a fresh {configure_deep_dup} of the value, not +candidate+'s own
-  # object: +candidate+ is frozen but still reachable if the caller kept
-  # its reference, so committing its own object would leave the live
-  # +config+ aliasing whatever that stale reference points to, and an
-  # in-place edit made through it after this call returns (e.g.
-  # `saved.masking_rules << rule`) would reach +config+ directly --
-  # bypassing {@configure_mutex} and any validation entirely, silently.
+  # object: when the block assigns a String, Array or Hash straight through
+  # (`c.masking_rules = mine`), +candidate+'s ivar *is* the caller's own
+  # object at this point -- {freeze_candidate} has not run yet -- so
+  # committing it as-is would make the live +config+ literally the same
+  # object as +mine+, and the caller mutating +mine+ afterward (`mine <<
+  # rule`, no retained +candidate+ needed at all) would reach +config+
+  # directly -- bypassing {@configure_mutex} and any validation entirely,
+  # silently.
   def self.apply_configure_changes(config, original, candidate)
     candidate.instance_variables.each do |ivar|
       value = candidate.instance_variable_get(ivar)
