@@ -20,7 +20,7 @@ module EndPointBlank
     # AT READ TIME (sc-755), not just against the expiry computed when the
     # entry was written:
     #
-    #   - If cache_ttl is currently disabled (<= 0), the ENTIRE cache **in
+    #   - If cache_ttl is currently 0 (disabled), the ENTIRE cache **in
     #     this process** is cleared -- every entry, not just the one looked
     #     up or being stored -- on both a read and a store that observe the
     #     disabled state. (Amended 2026-09-14: an earlier version of this
@@ -54,13 +54,12 @@ module EndPointBlank
     # new ttl allows. Elapsed-since-write is compared to the current ttl
     # directly instead.
     #
-    # cache_ttl must be a number. A nil cache_ttl is a configuration error,
-    # not a request to disable the cache: it raises (see current_ttl!) on
-    # every cache read and store -- including a lookup that would otherwise
-    # be a plain miss -- rather than being silently treated as "off", so an
-    # Authorized request against a nil cache_ttl fails closed. This matches
-    # master's behavior of failing loudly on a nil TTL rather than changing
-    # it.
+    # cache_ttl is always a non-negative Integer by the time this cache reads
+    # it: Configuration#cache_ttl= refuses nil, negative numbers and
+    # non-Integers at configure time (sc-970), so there is no invalid value
+    # left for this class to detect at read or store time. Until sc-970 a
+    # nil was only caught here, at the first cache use; that check moved
+    # into the setter rather than being duplicated.
     class AuthenticationCache
       include Singleton
 
@@ -79,7 +78,7 @@ module EndPointBlank
         return unless credentials
 
         @mutex.synchronize do
-          ttl = current_ttl!
+          ttl = current_ttl
           # A store made while disabled clears whatever is already cached,
           # same as a disabled read -- see the class comment -- and inserts
           # nothing itself.
@@ -156,7 +155,7 @@ module EndPointBlank
       # read that decided it was stale, so a concurrently-written fresh
       # entry for the same key can never be the one removed.
       def valid_entry(key)
-        ttl = current_ttl!
+        ttl = current_ttl
         return nil if clear_if_disabled!(ttl)
 
         entry = @cache[key]
@@ -170,18 +169,10 @@ module EndPointBlank
         end
       end
 
-      # cache_ttl must be a number -- nil is a configuration error, not a
-      # request to disable the cache, so this fails loudly and names the
-      # setting, rather than letting a bare nil drift into arithmetic (or,
-      # worse, into `<= 0`) and either raise something unrelated-looking or
-      # silently disable the cache.
-      def current_ttl!
-        ttl = ::EndPointBlank::Configuration.instance.cache_ttl
-        return ttl unless ttl.nil?
-
-        raise TypeError,
-              "EndPointBlank::Configuration#cache_ttl is nil; set it to a number " \
-              "(a value <= 0 disables the cache) rather than leaving it unset"
+      # Already validated by Configuration#cache_ttl= -- see the class
+      # comment.
+      def current_ttl
+        ::EndPointBlank::Configuration.instance.cache_ttl
       end
 
       def cache_disabled?(ttl)

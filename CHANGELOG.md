@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Breaking
+
+- **`cache_ttl` is validated when you set it, not when the cache first uses
+  it.** `c.cache_ttl =` now accepts only a non-negative `Integer` number of
+  seconds. Anything else raises `ArgumentError`, naming `cache_ttl` and the
+  value, from the assignment itself -- inside `EndPointBlank.configure`, so a
+  bad value stops the app at boot -- and leaves the previous value in place.
+  This is the rule sc-970 sets for every EndPointBlank SDK:
+
+  | `cache_ttl` | 0.10.0 | Now |
+  |---|---|---|
+  | never set | 300 seconds | 300 seconds (unchanged) |
+  | `0` | accepted: cache disabled | accepted: cache disabled (unchanged) |
+  | `nil` | accepted; `TypeError: can't convert NilClass into an exact number` on the first cache store | `ArgumentError` at configure time |
+  | negative, e.g. `-5` | accepted, silently behaving like `0` | `ArgumentError` at configure time |
+  | a `String`, e.g. `"abc"` | accepted; `TypeError: can't convert String into an exact number` on the first cache store | `ArgumentError` at configure time |
+  | a non-`Integer` number, e.g. `3.5` | accepted, silently used as a 3.5-second TTL | `ArgumentError` at configure time |
+
+  **If you disabled the cache with a negative value such as `-1`, change it
+  to `0`.** To get the default, omit the setting: no value assigned to
+  `cache_ttl` means "use the default".
+
 ### Fixed
 
 - **Runtime `cache_ttl` changes now apply to already-cached entries.**
@@ -45,13 +67,8 @@
   disabled state to trigger the clear; this release does not add
   configure-time flushing.
 
-  `cache_ttl` must be a number: a `nil` `cache_ttl` raises (naming
-  `cache_ttl` in the message) on every cache read and store -- including a
-  lookup that would otherwise be a plain miss -- rather than being silently
-  treated as disabled, so an `Authorized` request against a nil `cache_ttl`
-  fails closed. This matches this SDK's existing behavior of failing loudly
-  on a nil TTL. Bringing `nil` in line with the other SDKs (which default
-  it) is left to a separate follow-up story.
+  A `nil` `cache_ttl` is never read as "disabled": it is refused when it is
+  assigned -- see Breaking, above.
 
 ## 0.10.0
 

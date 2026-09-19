@@ -11,19 +11,50 @@ module EndPointBlank
   class Configuration
     include Singleton
 
+    # Seconds an authorization decision stays cached when cache_ttl is never
+    # assigned. See {#cache_ttl=}.
+    DEFAULT_CACHE_TTL = 300
+
     attr_writer :client_id, :client_secret, :base_url, :log_base_url, :app_name, :env_name
 
     attr_accessor :worker_count, :log_mode,
-                  :version_finder, :application_version, :token_ttl, :cache_ttl,
+                  :version_finder, :application_version, :token_ttl,
                   :masking_rules, :mask_hook, :logger, :trust_proxy_headers
+
+    attr_reader :cache_ttl
 
     def initialize
       @worker_count = 4
       @token_ttl = nil
-      @cache_ttl = 300
+      self.cache_ttl = DEFAULT_CACHE_TTL
       @masking_rules = []
       @mask_hook = nil
       @trust_proxy_headers = true
+    end
+
+    # Sets the authorization decision cache's TTL, in whole seconds.
+    #
+    # sc-970 sets one rule for this setting across every EndPointBlank SDK:
+    #
+    # - never assigned: the default, {DEFAULT_CACHE_TTL} (300) seconds;
+    # - 0: the cache is disabled;
+    # - a positive Integer: that many seconds;
+    # - anything else -- an explicit nil, a negative number, or a non-Integer
+    #   such as "300" or 3.5 -- raises ArgumentError here, at configure time,
+    #   and leaves the previous value in place. It is never deferred to the
+    #   first cache read or store, and never quietly read as "disabled" or
+    #   as "use the default".
+    #
+    # @raise [ArgumentError] if value is not a non-negative Integer
+    def cache_ttl=(value)
+      unless value.is_a?(Integer) && !value.negative?
+        raise ArgumentError,
+              "EndPointBlank::Configuration#cache_ttl must be a non-negative Integer number of " \
+              "seconds, got #{value.inspect}. To use the default of #{DEFAULT_CACHE_TTL} seconds, " \
+              "omit the cache_ttl setting entirely; set it to 0 to disable the cache."
+      end
+
+      @cache_ttl = value
     end
 
     # Returns the configured client id, falling back to the
