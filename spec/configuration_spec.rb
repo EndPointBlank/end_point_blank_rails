@@ -268,6 +268,20 @@ RSpec.describe EndPointBlank::Configuration do
       configuration.logger = original_logger
     end
 
+    # The thread specs below coordinate two threads through a Queue and
+    # Thread#join. A regression that raises inside a paused block before it
+    # signals `paused`, or that never returns from a commit, would otherwise
+    # hang the main thread -- and the whole suite -- forever instead of
+    # failing this one example. These wrappers turn that hang into a fast,
+    # loud failure.
+    def pop_or_fail(queue, timeout: 5)
+      queue.pop(timeout: timeout) || raise("timed out after #{timeout}s waiting for a thread to signal")
+    end
+
+    def join_or_fail(thread, timeout: 5)
+      thread.join(timeout) || raise("timed out after #{timeout}s waiting for a thread to finish")
+    end
+
     it "does not apply a valid field when a later field in the same call is invalid" do
       configuration.app_name = "original-app-name"
 
@@ -386,11 +400,11 @@ RSpec.describe EndPointBlank::Configuration do
         thread_a_error = e
       end
 
-      paused.pop
+      pop_or_fail(paused)
       thread_b = Thread.new { EndPointBlank.configure { |c| c.app_name = "b-value" } }
 
-      thread_a.join
-      thread_b.join
+      join_or_fail(thread_a)
+      join_or_fail(thread_b)
 
       expect(thread_a_error).to be_a(ArgumentError)
       expect(configuration.app_name).to eq("b-value")
@@ -423,11 +437,11 @@ RSpec.describe EndPointBlank::Configuration do
         end
       end
 
-      paused.pop
+      pop_or_fail(paused)
       thread_b = Thread.new { EndPointBlank.configure { |c| c.client_id = "from-b" } }
 
-      thread_a.join
-      thread_b.join
+      join_or_fail(thread_a)
+      join_or_fail(thread_b)
 
       expect(configuration.client_id).to eq("from-b")
     end
@@ -502,14 +516,14 @@ RSpec.describe EndPointBlank::Configuration do
         EndPointBlank.configure do |c|
           c.app_name = "new-app-name"
           paused << true
-          resume.pop
+          pop_or_fail(resume)
         end
       end
 
-      paused.pop
+      pop_or_fail(paused)
       configuration.cache_ttl = 0
       resume << true
-      thread.join
+      join_or_fail(thread)
 
       expect(configuration.cache_ttl).to eq(0)
     end
@@ -551,13 +565,122 @@ RSpec.describe EndPointBlank::Configuration do
         end
       end
 
-      paused.pop
+      pop_or_fail(paused)
       thread_b = Thread.new { EndPointBlank.configure { |c| c.masking_rules << { target: "from_b" } } }
 
-      thread_a.join
-      thread_b.join
+      join_or_fail(thread_a)
+      join_or_fail(thread_b)
 
       expect(configuration.masking_rules.map { |rule| rule[:target] }).to contain_exactly("from_a", "from_b")
+    end
+
+    # On master, the block argument *was* the live singleton, so a caller
+    # that kept a reference to it after the block still had a working
+    # handle. Now it is a detached scratch object, and retaining it has no
+    # defined meaning unless configure gives it one. Freezing it once
+    # configure returns turns a later write through that stale reference
+    # into a loud FrozenError instead of a silent no-op.
+    it "freezes the yielded object once configure returns, so a later write through it raises" do
+      saved = nil
+
+      EndPointBlank.configure do |c|
+        c.app_name = "boot"
+        saved = c
+      end
+
+      expect { saved.app_name = "after-the-fact" }.to raise_error(FrozenError)
+    end
+
+    # The freeze has to happen whether the block succeeded or raised --
+    # configure_candidate_for's object is created before the block runs
+    # either way, and a caller can retain it before the block gets to the
+    # line that raises.
+    it "freezes the yielded object even when the block raises, so a later write through it raises" do
+      saved = nil
+
+      expect do
+        EndPointBlank.configure do |c|
+          saved = c
+          c.app_name = "boot"
+          raise ArgumentError, "boom"
+        end
+      end.to raise_error(ArgumentError)
+
+      expect { saved.app_name = "after-the-fact" }.to raise_error(FrozenError)
+    end
+
+    # Freezing the yielded object only stops a *reassignment* through it
+    # (app_name = ...); it does not freeze the Array a field like
+    # masking_rules holds, so `saved.masking_rules << rule` does not raise.
+    # Before this fix, apply_configure_changes committed the candidate's
+    # own Array object, so it was literally the same object as the live
+    # config's after a commit, and a later append through the retained
+    # candidate reached the live config directly -- bypassing the Mutex and
+    # any validation entirely. Committing a fresh copy of the value, not
+    # the candidate's own object, means that append only ever touches the
+    # frozen candidate's own, now-abandoned copy.
+    it "does not let an append through the yielded object, made after configure returns, reach masking_rules" do
+      configuration.masking_rules = []
+      saved = nil
+
+      EndPointBlank.configure do |c|
+        c.masking_rules << { target: "from-block" }
+        saved = c
+      end
+
+      saved.masking_rules << { target: "from-after" }
+
+      expect(configuration.masking_rules.map { |rule| rule[:target] }).to eq(["from-block"])
+    end
+
+    # apply_configure_changes commits whatever public_instance_methods
+    # Configuration happens to have, generically -- there is no
+    # per-field list to keep in sync. That is also exactly what makes it
+    # easy to silently stop covering one: a field dropped from
+    # configure_snapshot_for/configure_candidate_for is simply absent from
+    # both the pre-block snapshot and the candidate, so nothing detects it
+    # as "changed" unless the block also happens to set it to a value that
+    # differs from whatever the live Configuration already holds -- which
+    # none of the specs above check for every field. This spec sets every
+    # public setter (other than cache_ttl=, which validates and is covered
+    # on its own above) to a value distinct from its current one, through a
+    # single configure call, and asserts each one landed on the live
+    # config. The `match_array` below fails loudly, independent of the rest
+    # of this spec, the day Configuration gains or loses a public setter
+    # and this fixture isn't updated to match.
+    it "commits every public setter's value through a single configure call" do
+      sentinel_values = {
+        client_id: "sentinel-client-id",
+        client_secret: "sentinel-client-secret",
+        base_url: "https://sentinel.example.com",
+        log_base_url: "https://sentinel-log.example.com",
+        app_name: "sentinel-app-name",
+        env_name: "sentinel-env-name",
+        worker_count: 99,
+        log_mode: :sentinel_log_mode,
+        version_finder: Object.new,
+        application_version: "9.9.9-sentinel",
+        token_ttl: 12_345,
+        masking_rules: [{ target: "sentinel" }],
+        mask_hook: proc { |value| value },
+        logger: Logger.new(IO::NULL),
+        trust_proxy_headers: false
+      }
+      setter_fields = described_class.public_instance_methods(false).grep(/=\z/) - [:cache_ttl=]
+      expect(setter_fields.map { |setter| setter.to_s.delete_suffix("=").to_sym }).to match_array(sentinel_values.keys)
+      original_values = sentinel_values.keys.to_h { |field| [field, configuration.public_send(field)] }
+
+      begin
+        EndPointBlank.configure do |c|
+          sentinel_values.each { |field, value| c.public_send(:"#{field}=", value) }
+        end
+
+        sentinel_values.each do |field, value|
+          expect(configuration.public_send(field)).to eq(value)
+        end
+      ensure
+        original_values.each { |field, value| configuration.public_send(:"#{field}=", value) }
+      end
     end
   end
 end

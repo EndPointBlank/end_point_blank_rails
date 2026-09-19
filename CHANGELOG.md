@@ -51,6 +51,24 @@
   `configure`, and then joins it will hang instead of raising, since that
   thread is genuinely waiting on a lock this thread holds.
 
+  The copy `configure` yields (`c`, by convention) is only valid for the
+  duration of the block: once `configure` returns, whether the block
+  returned normally or raised, `c` is frozen, so a write made through a
+  reference to it retained past the block raises `FrozenError` instead of
+  silently going nowhere. Every field that gets committed is also now
+  written as a fresh copy, not `c`'s own object, so the live
+  `Configuration` never ends up aliasing anything `c` still holds -- that
+  closes the one case freezing `c` itself doesn't cover: appending to an
+  Array or Hash field it holds (e.g. `saved.masking_rules << rule` after
+  the block) previously reached the live value directly once that field
+  had been committed, since the candidate and the live config ended up
+  holding the very same object, bypassing the Mutex and any validation
+  with no error. A read that bypasses `c` -- `Configuration.instance.app_name`,
+  or `EndPointBlank.logger` right after `c.logger = ...` earlier in the
+  same block -- still sees the value from before the call started, not
+  what the block has set on `c` so far, until the block returns and the
+  commit runs.
+
   This is generic over every `Configuration` instance variable, not a
   hand-maintained field list, so a future validated field (e.g. sc-1265's
   planned `cache_ttl` upper bound) is atomic under `configure`

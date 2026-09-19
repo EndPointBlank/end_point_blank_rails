@@ -72,6 +72,25 @@ module EndPointBlank
   # {Configuration#initialize} has ever assigned it): the assignment lands
   # on the copy and is discarded with it.
   #
+  # The yielded object (c, by convention) is valid only for the duration of
+  # the block. Once configure returns -- whether the block returned
+  # normally or raised -- it is frozen, so a write made through a
+  # reference to it retained past the block raises FrozenError instead of
+  # silently going nowhere. Every field that gets committed is written as
+  # a fresh copy, not the candidate's own object (see
+  # {apply_configure_changes}), so the live {Configuration} never ends up
+  # aliasing anything the candidate still holds; that closes the one case
+  # freezing the candidate itself doesn't cover, appending to an Array
+  # field it holds (`saved.masking_rules << rule` after the block), which
+  # only ever touches the frozen candidate's own, now-abandoned copy.
+  #
+  # Inside the block, a read that bypasses the block argument -- e.g.
+  # Configuration.instance.app_name, or EndPointBlank.logger right after
+  # `c.logger = new_logger` earlier in the same block -- still returns the
+  # value from before this configure call started, not what the block has
+  # set on c so far: nothing is written to the live singleton until the
+  # block returns normally and the commit runs.
+  #
   # Committing only the fields the block actually changed, rather than
   # every field, matters because the live singleton can change out from
   # under a configure call that never touches a given field -- a direct
@@ -116,19 +135,30 @@ module EndPointBlank
   # @raise whatever the block raises, or {Error} if called while a
   #   configure call is already in progress on the same thread; the live
   #   configuration is left exactly as it was before the call
-  def self.configure
+  def self.configure(&block)
     raise Error, "EndPointBlank.configure cannot be called from inside a configure block" if @configure_mutex.owned?
 
-    @configure_mutex.synchronize do
-      config = Configuration.instance
-      original = configure_snapshot_for(config)
-      candidate = configure_candidate_for(config)
+    @configure_mutex.synchronize { configure_and_commit(&block) }
+  end
 
-      yield candidate
+  # Builds the candidate and comparison snapshot for the current live
+  # +config+, runs +block+ against the candidate, and commits the result --
+  # freezing the candidate once the block returns, whether it succeeded or
+  # raised (see {EndPointBlank.configure}). Must only be called while
+  # {@configure_mutex} is held.
+  def self.configure_and_commit(&block)
+    config = Configuration.instance
+    original = configure_snapshot_for(config)
+    candidate = configure_candidate_for(config)
 
+    begin
+      block.call(candidate)
       apply_configure_changes(config, original, candidate)
+    ensure
+      candidate.freeze
     end
   end
+  private_class_method :configure_and_commit
 
   # Deep-copies every current instance variable of +config+ into a Hash
   # keyed by ivar name (see {configure_deep_dup}), so the result shares no
@@ -181,10 +211,18 @@ module EndPointBlank
   # block ran. A field the block never touched is left exactly as +config+
   # has it now, even if something else changed it while the block was
   # running. Only reached after the block has returned normally.
+  #
+  # Commits a fresh {configure_deep_dup} of the value, not +candidate+'s own
+  # object: +candidate+ is frozen but still reachable if the caller kept
+  # its reference, so committing its own object would leave the live
+  # +config+ aliasing whatever that stale reference points to, and an
+  # in-place edit made through it after this call returns (e.g.
+  # `saved.masking_rules << rule`) would reach +config+ directly --
+  # bypassing {@configure_mutex} and any validation entirely, silently.
   def self.apply_configure_changes(config, original, candidate)
     candidate.instance_variables.each do |ivar|
       value = candidate.instance_variable_get(ivar)
-      config.instance_variable_set(ivar, value) unless value == original[ivar]
+      config.instance_variable_set(ivar, configure_deep_dup(value)) unless value == original[ivar]
     end
   end
   private_class_method :apply_configure_changes

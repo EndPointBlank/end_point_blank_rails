@@ -67,6 +67,14 @@ raising -- a block that raises leaves the configuration exactly as it was before
 Every setting listed below can be set explicitly in that block, and most also fall back to an
 `ENDPOINTBLANK_*` environment variable, then to a built-in default.
 
+`c` is only valid for the duration of the block: once `configure` returns, whether the block
+returned normally or raised, `c` is frozen, so a write made through a reference to it kept past
+the block raises `FrozenError` instead of silently going nowhere. A read that bypasses `c` --
+`EndPointBlank::Configuration.instance.app_name`, or `EndPointBlank.logger` right after
+`c.logger = ...` earlier in the same block -- still sees the value from before the `configure`
+call started, not what the block has set on `c` so far, until the block returns and the change
+is applied.
+
 **Precedence: explicit `configure` value > `ENDPOINTBLANK_*` environment variable > default.**
 
 | `configure` setting | Env var fallback | Default | Notes |
