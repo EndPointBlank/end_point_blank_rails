@@ -57,9 +57,7 @@ module EndPointBlank
     # cache_ttl is always a non-negative Integer by the time this cache reads
     # it: Configuration#cache_ttl= refuses nil, negative numbers and
     # non-Integers at configure time (sc-970), so there is no invalid value
-    # left for this class to detect at read or store time. Until sc-970 a
-    # nil was only caught here, at the first cache use; that check moved
-    # into the setter rather than being duplicated.
+    # left for this class to detect at read or store time.
     class AuthenticationCache
       include Singleton
 

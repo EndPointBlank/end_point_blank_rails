@@ -254,8 +254,7 @@ RSpec.describe EndPointBlank::Commands::AuthenticationCache do
     end
   end
 
-  # sc-970 rule, for all five SDKs: 0 means "caching disabled". Unchanged in this
-  # SDK -- this pins it.
+  # sc-970 rule, for all five SDKs: 0 means "caching disabled".
   describe "a cache_ttl of 0" do
     it "stores nothing and misses every read" do
       configuration.cache_ttl = 0
@@ -269,12 +268,9 @@ RSpec.describe EndPointBlank::Commands::AuthenticationCache do
   end
 
   # sc-970: an explicit nil, a negative number, or a non-Integer is refused by
-  # Configuration#cache_ttl= itself, at configure time. Before sc-970 each of
-  # these reached this cache: nil raised a TypeError at the first read or
-  # store, "abc" raised an unrelated-looking ArgumentError from `"abc" <= 0`,
-  # a negative number silently disabled the cache, and 3.5 was silently used
-  # as a 3.5s ttl. None of them can reach it now, so the cache goes on
-  # serving under the last valid ttl rather than failing at first use.
+  # Configuration#cache_ttl= itself, at configure time, so none of them ever
+  # reaches this cache: it goes on serving under the last valid ttl rather
+  # than failing, or silently changing behavior, at first use.
   describe "an invalid cache_ttl" do
     [nil, -5, "abc", 3.5].each do |value|
       it "is refused at assignment (#{value.inspect}), and the cache keeps working under the previous ttl" do
