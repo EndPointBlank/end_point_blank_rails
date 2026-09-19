@@ -68,10 +68,10 @@ RSpec.describe EndPointBlank::Commands::AuthenticationCache do
   end
 
   describe "expiry" do
-    # Storing with a disabled (<= 0) ttl inserts nothing (sc-755 rule 4), so
+    # Storing with a disabled (0) ttl inserts nothing (sc-755 rule 4), so
     # these two need a genuinely positive ttl and an advanced clock -- with
-    # ttl -1, `store` never wrote an entry and both tests below passed
-    # without exercising anything.
+    # a disabled ttl, `store` never wrote an entry and both tests below
+    # passed without exercising anything.
     it "stops serving an entry once its TTL has passed" do
       t0 = Time.now
       allow(Time).to receive(:now).and_return(t0)
@@ -157,7 +157,7 @@ RSpec.describe EndPointBlank::Commands::AuthenticationCache do
       configuration.cache_ttl = 300
       cache.store("k", "credentials")
 
-      configuration.cache_ttl = -1
+      configuration.cache_ttl = 0
       expect(cache.retrieve("k")).to be_nil
       expect(cache.size).to eq(0)
 
@@ -190,7 +190,7 @@ RSpec.describe EndPointBlank::Commands::AuthenticationCache do
       cache.store("a", "a-value")
       cache.store("b", "b-value")
 
-      configuration.cache_ttl = -1
+      configuration.cache_ttl = 0
       expect(cache.retrieve("a")).to be_nil
       expect(cache.size).to eq(0)
 
@@ -203,7 +203,7 @@ RSpec.describe EndPointBlank::Commands::AuthenticationCache do
       cache.store("a", "a-value")
       cache.store("b", "b-value")
 
-      configuration.cache_ttl = -1
+      configuration.cache_ttl = 0
       expect(cache.retrieve("never-stored")).to be_nil
       expect(cache.size).to eq(0)
 
@@ -216,7 +216,7 @@ RSpec.describe EndPointBlank::Commands::AuthenticationCache do
       cache.store("a", "a-value")
       cache.store("b", "b-value")
 
-      configuration.cache_ttl = -1
+      configuration.cache_ttl = 0
       cache.store("c", "c-value")
 
       expect(cache.size).to eq(0)
@@ -254,28 +254,36 @@ RSpec.describe EndPointBlank::Commands::AuthenticationCache do
     end
   end
 
-  describe "a nil cache_ttl" do
-    # The controller's ruling: this story must not silently change nil
-    # semantics. On master, a nil cache_ttl already failed loudly (a
-    # TypeError from `Time.now + nil` inside store). It must keep failing
-    # loudly and say so explicitly -- not be read as "disabled" now that
-    # every read, not just store, consults cache_ttl. Cross-SDK nil parity
-    # (JS/Java/Elixir default a nil ttl rather than raising) is a separate
-    # follow-up story; this SDK does not change its nil behavior here.
-    it "raises naming cache_ttl, rather than silently disabling the cache, on a store" do
-      configuration.cache_ttl = nil
+  # sc-970 rule, for all five SDKs: 0 means "caching disabled".
+  describe "a cache_ttl of 0" do
+    it "stores nothing and misses every read" do
+      configuration.cache_ttl = 0
 
-      expect { cache.store("k", "credentials") }.to raise_error(TypeError, /cache_ttl/)
-    end
-
-    it "raises naming cache_ttl, rather than silently disabling the cache, on a read" do
-      configuration.cache_ttl = 300
       cache.store("k", "credentials")
 
-      configuration.cache_ttl = nil
+      expect(cache.size).to eq(0)
+      expect(cache.retrieve("k")).to be_nil
+      expect(cache.exists?("k")).to be(false)
+    end
+  end
 
-      expect { cache.retrieve("k") }.to raise_error(TypeError, /cache_ttl/)
-      expect { cache.exists?("k") }.to raise_error(TypeError, /cache_ttl/)
+  # sc-970: an explicit nil, a negative number, or a non-Integer is refused by
+  # Configuration#cache_ttl= itself, at configure time, so none of them ever
+  # reaches this cache: it goes on serving under the last valid ttl rather
+  # than failing, or silently changing behavior, at first use.
+  describe "an invalid cache_ttl" do
+    [nil, -5, "abc", 3.5].each do |value|
+      it "is refused at assignment (#{value.inspect}), and the cache keeps working under the previous ttl" do
+        configuration.cache_ttl = 300
+        cache.store("k", "credentials")
+
+        expect { configuration.cache_ttl = value }.to raise_error(ArgumentError, /cache_ttl/)
+
+        expect(configuration.cache_ttl).to eq(300)
+        expect(cache.retrieve("k")).to eq("credentials")
+        cache.store("k2", "more")
+        expect(cache.retrieve("k2")).to eq("more")
+      end
     end
   end
 

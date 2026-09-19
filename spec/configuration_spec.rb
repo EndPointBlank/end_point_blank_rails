@@ -165,5 +165,81 @@ RSpec.describe EndPointBlank::Configuration do
       expect(configuration.env_name).to be_nil
     end
   end
+
+  # sc-970 sets one rule for all five SDKs. Omitting cache_ttl means the 300s
+  # default; 0 disables the cache; an explicit nil, a negative number, or a
+  # non-Integer is a configuration error raised by the assignment itself --
+  # at configure time, during boot -- not at the first cache read or store.
+  #
+  # Deliberately not added to CONFIGURATION_SPEC_IVARS: the `before` above
+  # nils every ivar in that list, and nil is exactly the value this setting
+  # must never hold. Snapshot and restore it through the ivar instead, so
+  # restoring never goes through the writer under test.
+  describe "#cache_ttl" do
+    around do |example|
+      original_cache_ttl = configuration.instance_variable_get(:@cache_ttl)
+      example.run
+      configuration.instance_variable_set(:@cache_ttl, original_cache_ttl)
+    end
+
+    it "defaults to 300 seconds when never set" do
+      # A fresh instance, not the shared singleton: other specs assign
+      # cache_ttl, so "never set" is only honest on an object nothing touched.
+      expect(described_class.send(:new).cache_ttl).to eq(300)
+    end
+
+    it "accepts a positive Integer" do
+      EndPointBlank.configure { |c| c.cache_ttl = 60 }
+
+      expect(configuration.cache_ttl).to eq(60)
+    end
+
+    # What 0 *does* (disables the cache) is pinned where it happens, in
+    # spec/end_point_blank/commands/authentication_cache_spec.rb.
+    it "accepts 0" do
+      EndPointBlank.configure { |c| c.cache_ttl = 0 }
+
+      expect(configuration.cache_ttl).to eq(0)
+    end
+
+    it "raises at the assignment itself on an explicit nil, naming cache_ttl and saying to omit it for the default" do
+      expect { EndPointBlank.configure { |c| c.cache_ttl = nil } }
+        .to raise_error(ArgumentError) { |error|
+          expect(error.message).to include("cache_ttl")
+          expect(error.message).to include("got nil")
+          expect(error.message).to include("To use the default of 300 seconds, omit the cache_ttl setting")
+          expect(error.message).to include("0 to disable")
+        }
+    end
+
+    {
+      "a negative Integer" => -5,
+      "-1, which used to mean disabled" => -1,
+      "a String" => "abc",
+      "a numeric String" => "300",
+      "a Float" => 3.5,
+      "a whole-number Float" => 300.0,
+      "a Rational" => Rational(300, 1),
+      "a boolean" => true
+    }.each do |description, value|
+      it "raises at the assignment itself on #{description} (#{value.inspect}), naming cache_ttl and the value" do
+        expect { EndPointBlank.configure { |c| c.cache_ttl = value } }
+          .to raise_error(ArgumentError) { |error|
+            expect(error.message).to include("cache_ttl")
+            expect(error.message).to include("got #{value.inspect}")
+            expect(error.message).to include("To use the default of 300 seconds, omit the cache_ttl setting")
+          }
+      end
+    end
+
+    it "leaves the previous value in place when an assignment is rejected" do
+      EndPointBlank.configure { |c| c.cache_ttl = 120 }
+
+      [nil, -5, "abc", 3.5].each do |value|
+        expect { configuration.cache_ttl = value }.to raise_error(ArgumentError)
+        expect(configuration.cache_ttl).to eq(120)
+      end
+    end
+  end
 end
 # rubocop:enable Metrics/BlockLength
