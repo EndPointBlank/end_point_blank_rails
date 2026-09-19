@@ -18,16 +18,31 @@
   # app_name was left as "checkout" -- half-updated, with no error saying so
   ```
 
-  `configure` now snapshots every field before yielding and, if the block
-  raises, restores every field to its pre-call value before re-raising. A
-  rejected call now leaves the configuration exactly as it was -- nothing
-  it touched is kept. This is sc-1266, the same fix and the same test
-  shape in all five EndPointBlank SDKs.
+  `configure` now yields a detached copy of the configuration and only
+  applies it to the live singleton once the block returns normally, so a
+  rejected call leaves the live configuration exactly as it was -- nothing
+  it touched is kept, including a field set for the very first time (e.g.
+  `client_id` on a fresh boot, before anything has ever assigned it) and an
+  in-place edit of `masking_rules` (its array and each rule Hash in it are
+  duplicated into the copy). This holds for *any* exception the block
+  raises, not only `StandardError`. `configure` calls are also now
+  serialized with a Mutex held across the block and the commit, so a
+  `configure` call that is going to fail can no longer race a concurrent
+  call that succeeds and undo its commit.
 
-  The snapshot/restore is generic over every `Configuration` instance
-  variable, not a hand-maintained field list, so a future validated field
-  (e.g. sc-1265's planned `cache_ttl` upper bound) is atomic under
-  `configure` automatically, with no changes needed here.
+  This is generic over every `Configuration` instance variable, not a
+  hand-maintained field list, so a future validated field (e.g. sc-1265's
+  planned `cache_ttl` upper bound) is atomic under `configure`
+  automatically, with no changes needed here. Objects the caller hands in
+  by reference -- `logger`, `mask_hook`, `version_finder` -- are copied by
+  reference like any other field; `configure` cannot roll back mutation the
+  caller performs on those objects themselves, and calling `configure` from
+  more than one thread only serializes calls to `configure` itself, not
+  reads of `Configuration` elsewhere.
+
+  This is sc-1266. Of the other four EndPointBlank SDKs, only Java (`java#39`)
+  had this bug and needed a code fix; JS, Python and Elixir were already
+  atomic and got test-only PRs pinning that behavior.
 
 ## 0.11.0
 

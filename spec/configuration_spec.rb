@@ -252,8 +252,15 @@ RSpec.describe EndPointBlank::Configuration do
   describe ".configure" do
     around do |example|
       original_cache_ttl = configuration.instance_variable_get(:@cache_ttl)
+      # Captured with #dup up front, not just the reference: the bug this
+      # spec's masking_rules example pins is exactly an in-place mutation of
+      # the live array, so restoring the same (already-mutated) object after
+      # the example would be a no-op and would leak the mutation into every
+      # test that runs after it.
+      original_masking_rules = configuration.instance_variable_get(:@masking_rules).map(&:dup)
       example.run
       configuration.instance_variable_set(:@cache_ttl, original_cache_ttl)
+      configuration.instance_variable_set(:@masking_rules, original_masking_rules)
     end
 
     it "does not apply a valid field when a later field in the same call is invalid" do
@@ -283,6 +290,106 @@ RSpec.describe EndPointBlank::Configuration do
 
       expect(configuration.app_name).to eq("original-app-name")
       expect(configuration.client_id).to eq("original-client-id")
+    end
+
+    # senior-dev review of PR #40 (finding 1): the file-level `before` above
+    # nils every CONFIGURATION_SPEC_IVARS entry before each example, so
+    # every test above starts from ivars that already exist. That hides the
+    # one case that actually differs: a field a `configure` block sets for
+    # the very first time, before anything else has ever assigned it (a
+    # fresh boot). This test undoes that fixture for @client_id specifically
+    # so it starts genuinely unset, the way it is in a real process before
+    # any configure call.
+    it "does not create a field the block sets for the first time when a later field in the same call is invalid" do
+      configuration.remove_instance_variable(:@client_id) if configuration.instance_variable_defined?(:@client_id)
+
+      expect do
+        EndPointBlank.configure do |c|
+          c.client_id = "half-applied"
+          c.cache_ttl = -1
+        end
+      end.to raise_error(ArgumentError)
+
+      expect(configuration.instance_variable_defined?(:@client_id)).to be(false)
+      expect(configuration.client_id).to be_nil
+    end
+
+    # senior-dev review of PR #40 (finding 2): masking_rules is a mutable
+    # Array (see Configuration#initialize and the README's "ordered list of
+    # masking rule hashes"), and `<<` mutates it in place rather than
+    # replacing it. A rollback that only restores ivar *references* cannot
+    # undo that: restoring "the same array" restores nothing.
+    it "does not keep an in-block append to masking_rules when a later field in the same call is invalid" do
+      configuration.masking_rules = []
+
+      expect do
+        EndPointBlank.configure do |c|
+          c.masking_rules << { "type" => "probe" }
+          c.cache_ttl = -1
+        end
+      end.to raise_error(ArgumentError)
+
+      expect(configuration.masking_rules).to eq([])
+    end
+
+    # senior-dev review of PR #40 (finding 3): the original rollback only
+    # rescued StandardError, so a block that raised a ScriptError (LoadError,
+    # NotImplementedError) or any other non-StandardError Exception kept
+    # whatever it had already applied. NotImplementedError is used here
+    # because it needs no environment setup; LoadError from a `require` for
+    # a missing optional dependency is a realistic way this happens for real.
+    it "does not apply a field set before the block raises an exception that is not a StandardError" do
+      configuration.app_name = "original-app-name"
+
+      expect do
+        EndPointBlank.configure do |c|
+          c.app_name = "new-app-name"
+          raise NotImplementedError, "boom"
+        end
+      end.to raise_error(NotImplementedError)
+
+      expect(configuration.app_name).to eq("original-app-name")
+    end
+
+    # java#39 follow-up (sc-1266): copy-then-commit makes a single call
+    # atomic, but two overlapping calls both start from the same live state,
+    # and without serialization whichever finishes committing last wins --
+    # even when it is a call that was always going to fail. At 31dc8dc
+    # (rollback-in-place, no lock) this reproduces the java review's finding
+    # directly: thread A applies its field straight to the live singleton,
+    # pauses, thread B's independent, valid call commits "b-value" to the
+    # live singleton while A is paused, and then A's rollback restores A's
+    # own stale pre-call snapshot over the top of B's commit. The Mutex
+    # closes this by holding the lock across the block *and* the commit, so
+    # thread B cannot even start running its own block until thread A's
+    # call -- raise included -- has fully released the lock.
+    it "does not let a failing configure call on one thread affect a successful concurrent call on another" do
+      configuration.app_name = "original-app-name"
+      paused = Queue.new
+      thread_a_error = nil
+
+      thread_a = Thread.new do
+        EndPointBlank.configure do |c|
+          c.app_name = "a-value"
+          paused << true
+          # Long enough that thread B -- an uncontended, near-instant call
+          # with no sleep of its own -- is certain to finish first if
+          # nothing is serializing the two calls.
+          sleep 0.3
+          c.cache_ttl = -1
+        end
+      rescue ArgumentError => e
+        thread_a_error = e
+      end
+
+      paused.pop
+      thread_b = Thread.new { EndPointBlank.configure { |c| c.app_name = "b-value" } }
+
+      thread_a.join
+      thread_b.join
+
+      expect(thread_a_error).to be_a(ArgumentError)
+      expect(configuration.app_name).to eq("b-value")
     end
   end
 end

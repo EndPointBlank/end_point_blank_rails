@@ -44,35 +44,89 @@ end
 module EndPointBlank
   class Error < StandardError; end
 
+  # Serializes {EndPointBlank.configure} calls. Without this, two calls
+  # racing each other could each copy the same starting state, and
+  # whichever finished applying last would silently discard the other's
+  # committed changes -- including a call that raised doing exactly that to
+  # a concurrent call that had already succeeded. See {EndPointBlank.configure}.
+  @configure_mutex = Mutex.new
+
   # Applies a block of configuration changes to the shared {Configuration}
   # instance atomically: either every assignment in the block succeeds, or
   # none of them are kept.
   #
-  # Each setter runs against the live singleton as the block executes, so a
-  # validating setter (like {Configuration#cache_ttl=}) can raise partway
-  # through a multi-field block. Before yielding, every current value is
-  # snapshotted; if the block raises, every value is restored to its
-  # snapshot before the error propagates, so a call that sets several
-  # fields and then fails validation on one of them leaves the
-  # configuration exactly as it was before the call -- not half-updated.
+  # The block receives a detached copy of the configuration, not the live
+  # singleton, and the copy's values are only written onto the live
+  # singleton after the block returns normally. That makes the atomicity
+  # structural rather than a rollback: if the block raises -- any
+  # exception, not only StandardError -- the live singleton was never
+  # touched in the first place, so there is nothing to undo. This also
+  # covers a field the block sets for the very first time (e.g. client_id
+  # on a fresh boot, before {Configuration#initialize} has ever assigned
+  # it): the assignment lands on the copy and is discarded with it.
   #
-  # This is generic over every field {Configuration} has now or gains later
-  # (including a future sc-1265 cache_ttl upper bound): it snapshots and
-  # restores every instance variable, so no new setter needs to be added
-  # here for its validation to be atomic.
+  # {Configuration#masking_rules} and its rule Hashes are duplicated into
+  # the copy, so `c.masking_rules << rule` or mutating a rule Hash the
+  # caller already installed can never reach the live list before the
+  # block succeeds. Objects the caller owns and hands in by reference --
+  # {Configuration#logger}, {Configuration#mask_hook},
+  # {Configuration#version_finder} -- are copied by reference, like any
+  # other field; EndPointBlank.configure cannot and does not roll back
+  # mutation the caller performs on those objects themselves.
   #
-  # @raise whatever the block raises, after rolling back
-  def self.configure(&block)
-    config = Configuration.instance
-    snapshot = config.instance_variables.each_with_object({}) do |ivar, memo|
-      memo[ivar] = config.instance_variable_get(ivar)
-    end
+  # This is generic over every field {Configuration} has now or gains
+  # later (including a future sc-1265 cache_ttl upper bound): it copies
+  # every instance variable, so no new setter needs to be added here for
+  # its validation to be atomic.
+  #
+  # Calls are serialized with a module-level Mutex held across both the
+  # block and the commit (see {@configure_mutex}), so two calls from
+  # different threads can never interleave their reads and writes: the
+  # second one always starts from whatever the first one left behind,
+  # whether the first succeeded or raised. The lock only orders
+  # configure-against-configure; a reader elsewhere that is not going
+  # through configure can still observe the commit loop's writes one field
+  # at a time while it runs.
+  #
+  # @raise whatever the block raises; the live configuration is left
+  #   exactly as it was before the call
+  def self.configure
+    @configure_mutex.synchronize do
+      config = Configuration.instance
+      candidate = configure_candidate_for(config)
 
-    yield config
-  rescue StandardError
-    snapshot.each { |ivar, value| config.instance_variable_set(ivar, value) }
-    raise
+      yield candidate
+
+      apply_configure_candidate(config, candidate)
+    end
   end
+
+  # Builds the detached copy {EndPointBlank.configure} yields to its block:
+  # every current instance variable of +config+, copied onto a bare
+  # {Configuration} instance that was never handed through Singleton's
+  # +instance+ (so it stays a private scratch object, not a second
+  # singleton). masking_rules is duplicated one level deep -- the array and
+  # each rule Hash in it -- since it is the one documented mutable,
+  # in-place-editable field.
+  def self.configure_candidate_for(config)
+    candidate = Configuration.send(:allocate)
+    config.instance_variables.each do |ivar|
+      value = config.instance_variable_get(ivar)
+      value = value.map(&:dup) if ivar == :@masking_rules && value.is_a?(Array)
+      candidate.instance_variable_set(ivar, value)
+    end
+    candidate
+  end
+  private_class_method :configure_candidate_for
+
+  # Copies every instance variable the block set on +candidate+ onto the
+  # live +config+. Only reached after the block has returned normally.
+  def self.apply_configure_candidate(config, candidate)
+    candidate.instance_variables.each do |ivar|
+      config.instance_variable_set(ivar, candidate.instance_variable_get(ivar))
+    end
+  end
+  private_class_method :apply_configure_candidate
 
   # Defaults to stderr, not stdout. This logger belongs to a library running
   # inside someone else's process: anything it writes to stdout lands in the

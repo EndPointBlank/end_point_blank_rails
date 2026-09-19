@@ -61,7 +61,9 @@ EndPointBlank::Writers::LogWriter.info("service started", { pid: Process.pid })
 
 ## Configuration
 
-`EndPointBlank.configure { |c| ... }` yields the `EndPointBlank::Configuration` singleton.
+`EndPointBlank.configure { |c| ... }` yields the `EndPointBlank::Configuration` settings and
+applies every assignment made inside the block together, only once the block returns without
+raising -- a block that raises leaves the configuration exactly as it was before the call.
 Every setting listed below can be set explicitly in that block, and most also fall back to an
 `ENDPOINTBLANK_*` environment variable, then to a built-in default.
 
