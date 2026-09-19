@@ -1,5 +1,98 @@
 # Changelog
 
+## 0.11.1
+
+### Fixed
+
+- **`EndPointBlank.configure` is now all-or-nothing.** The sc-970 review
+  found that this SDK (along with Java) applied a `configure` block's
+  assignments to the live `Configuration` singleton as the block executed,
+  so a field set *before* a later one failed validation stayed applied even
+  though the whole call raised:
+
+  ```ruby
+  EndPointBlank.configure do |c|
+    c.app_name = "checkout"  # applied immediately
+    c.cache_ttl = -1         # raises ArgumentError here
+  end
+  # app_name was left as "checkout" -- half-updated, with no error saying so
+  ```
+
+  `configure` now yields a detached copy of the configuration, and once the
+  block returns normally, writes back only the fields whose value on that
+  copy differs from an independent deep copy taken before the block ran --
+  so a rejected call leaves the live configuration exactly as it was,
+  including a field set for the very first time (e.g. `client_id` on a
+  fresh boot, before anything has ever assigned it) and an in-place edit
+  anywhere in a String, Array or Hash field (both `masking_rules` and the
+  rule Hashes in it, and a String field such as `app_name` edited with
+  `<<`, are deep-copied into the block's copy). This holds for *any*
+  exception the block raises, not only `StandardError`. Committing only
+  what the block changed, rather than every field, also means a write to a
+  field the block never touched -- made from inside the block itself (e.g.
+  `EndPointBlank.logger =`) or concurrently from another thread outside
+  `configure` -- is no longer silently reset back to what it was when the
+  copy was made.
+
+  `configure` calls are also now serialized with a Mutex held across the
+  block and the commit, so two calls can no longer overlap. Without that,
+  two calls that both succeed could still overlap -- the second starting
+  while the first is still running -- and both would build their copy from
+  the same starting snapshot. Whichever finished last would still decide
+  what to write by comparing its own copy against that same now-stale
+  snapshot rather than against whatever was live on `Configuration` by the
+  time it actually committed, so it would silently write its own change
+  over whatever the other call had already committed. Because Ruby's
+  `Mutex` is not reentrant, calling `configure` again from inside a
+  `configure` block, on the same thread, now raises `EndPointBlank::Error`
+  instead of running -- previously, with no atomicity in place at all,
+  nesting worked by accident, since both calls just mutated the live
+  singleton directly. A block that starts a different thread, has it call
+  `configure`, and then joins it will hang instead of raising, since that
+  thread is genuinely waiting on a lock this thread holds.
+
+  The copy `configure` yields (`c`, by convention) is only valid for the
+  duration of the block: once `configure` returns, whether the block
+  returned normally or raised, `c` is frozen, and every String, Array or
+  Hash value it holds is first replaced with its own frozen deep copy. A
+  write made through a reference to `c` retained past the block now always
+  raises `FrozenError` -- a reassignment (`saved.app_name = "x"`) because
+  `c` itself is frozen, and an in-place edit (`saved.masking_rules << rule`,
+  `saved.app_name << "x"`, editing a rule Hash in place) because the value
+  it points to is frozen too, not just `c`. A read that bypasses `c` --
+  `Configuration.instance.app_name`, or `EndPointBlank.logger` right after
+  `c.logger = ...` earlier in the same block -- still sees the value from
+  before the call started, not what the block has set on `c` so far, until
+  the block returns and the commit runs.
+
+  Assigning a String, Array or Hash through `c` now copies it, rather than
+  storing the object itself: `rules = [...]; EndPointBlank.configure { |c|
+  c.masking_rules = rules }; rules << extra` no longer affects the live
+  configuration, whereas on 0.11.0 it did, because `c` was the live
+  singleton and `masking_rules` held that very same array. Call `configure`
+  again to apply a further change. Objects the caller hands in by
+  reference that are not String/Array/Hash -- `logger`, `mask_hook`,
+  `version_finder` -- are unaffected by any of this: they are held by
+  reference, not copied, both during the block and after it returns, so
+  mutating one through a retained `c` (`saved.logger.level = ...`) still
+  reaches the live value, the same as mutating it through
+  `EndPointBlank.logger` or `Configuration.instance.logger` directly would.
+
+  This is generic over every `Configuration` instance variable, not a
+  hand-maintained field list, so a future validated field (e.g. sc-1265's
+  planned `cache_ttl` upper bound) is atomic under `configure`
+  automatically, with no changes needed here. Objects the caller hands in
+  by reference -- `logger`, `mask_hook`, `version_finder` -- are copied by
+  reference like any other field, not deep-copied, since they are not
+  String/Array/Hash; `configure` cannot roll back mutation the caller
+  performs on those objects themselves, and calling `configure` from more
+  than one thread only serializes calls to `configure` itself, not reads of
+  `Configuration` elsewhere.
+
+  This is sc-1266. Of the other four EndPointBlank SDKs, only Java (`java#39`)
+  had this bug and needed a code fix; JS, Python and Elixir were already
+  atomic and got test-only PRs pinning that behavior.
+
 ## 0.11.0
 
 ### Breaking
