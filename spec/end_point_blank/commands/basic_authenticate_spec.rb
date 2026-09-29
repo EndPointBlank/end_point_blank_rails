@@ -50,7 +50,7 @@ RSpec.describe EndPointBlank::Commands::BasicAuthenticate do
     it "is this service's own Basic credentials, built once" do
       # It read `"Basic #{AuthorizationGenerate.generate}"`, naming a constant
       # that does not exist -- so this command raised NameError before it could
-      # reach the network. `Authorization.header` called with no argument
+      # reach the network. `Authorization.intake_header` (formerly `header` with no argument)
       # already returns the complete "Basic <base64>" string; wrapping it in a
       # second "Basic " would send "Basic Basic ..." and intake would refuse
       # every request that used this path.

@@ -34,6 +34,7 @@ require_relative "end_point_blank/middleware/rack/report_interaction"
 require_relative "end_point_blank/rack/env_store"
 require_relative "end_point_blank/rack/headers"
 require_relative "end_point_blank/unauthorized_error"
+require_relative "end_point_blank/token_unavailable_error"
 if defined?(::Rails)
   require_relative "end_point_blank/rails/authenticated"
   require_relative "end_point_blank/rails/authorized"

@@ -8,8 +8,8 @@ auto-loads (railtie + middleware) when Rails is present.
 ## Capabilities
 
 - **Endpoint tracking** — every request/response passing through the Rack middleware is reported.
-- **Authorization** — outbound calls to other EndPointBlank-protected services are signed
-  (`Basic` client-credential or cached `Bearer` token), and inbound requests can be authorized
+- **Authorization** — outbound calls to other EndPointBlank-protected services carry a
+  `Bearer` access token (never this service's own client credentials), and inbound requests can be authorized
   against the EndPointBlank service before your action runs.
 - **Error, request, response, and log reporting** — background, queued, non-blocking delivery to
   the EndPointBlank intake API.
@@ -90,7 +90,7 @@ still reaches the live value, the same as mutating it through `EndPointBlank.log
 
 | `configure` setting | Env var fallback | Default | Notes |
 |---|---|---|---|
-| `client_id` | `ENDPOINTBLANK_CLIENT_ID` | `nil` | Used to build the `Basic` authorization header. |
+| `client_id` | `ENDPOINTBLANK_CLIENT_ID` | `nil` | Authenticates this service to its own intake (`Basic`). Never sent to a provider. |
 | `client_secret` | `ENDPOINTBLANK_CLIENT_SECRET` | `nil` | Paired with `client_id`. |
 | `base_url` | `ENDPOINTBLANK_BASE_URL` | `https://in.endpointblank.com` | Base for access-token, authorize, and endpoint-update APIs. |
 | `log_base_url` | `ENDPOINTBLANK_LOG_BASE_URL` | `https://log.endpointblank.com` | Base for error/request/response/log reporting APIs. |
@@ -171,18 +171,45 @@ export ENDPOINTBLANK_ENV=staging
 
 ### Authorization
 
-`EndPointBlank::Authorization.header(base_url = nil)` builds the outbound `Authorization` header
-used by the gem's own HTTP calls: a cached `Bearer` token covering `base_url` when one is
-available (via `EndPointBlank::AccessTokens`), otherwise `Basic` credentials built from
-`client_id` / `client_secret` -- which covers both giving no target and a token that could not
-be obtained.
+`EndPointBlank::Authorization.header(base_url)` builds the `Authorization` header for an outbound
+call to a provider. It is always a `Bearer` token covering `base_url` (via
+`EndPointBlank::AccessTokens`, minting one if none is cached). It **never** falls back to `Basic`:
+a client must never send its own `client_id` / `client_secret` to a provider or to the provider's
+intake. When no token can be obtained it raises `EndPointBlank::TokenUnavailableError` instead.
 
 ```ruby
-EndPointBlank::Authorization.header # => "Basic ..."
-
 # Pass the URL you are about to call, NOT a hostname.
 # Strip any query string or fragment first -- intake rejects both.
-EndPointBlank::Authorization.header("https://api.example.com/orders") # => "Bearer ..." if a token is cached
+url = "https://api.example.com/orders"
+
+begin
+  auth = EndPointBlank::Authorization.header(url) # => "Bearer ..."
+  Excon.post(url, headers: { "Authorization" => auth }, body: payload)
+rescue EndPointBlank::TokenUnavailableError => e
+  # No token, so the provider was never called. e.outcome / e.status /
+  # e.failure say why (see "Why a token could not be minted" below): retry,
+  # degrade, or fail your own request -- but do not send credentials instead.
+  Rails.logger.warn(e.message)
+  raise
+end
+```
+
+`base_url` is required. Until this release `header` with no argument returned `Basic` credentials; that
+form is gone, and `header(nil)` or `header("")` raises `ArgumentError`. The SDK's own calls to its
+own intake (authorize, token minting, endpoint updates, the log/request/response writers) still
+authenticate with `Basic`, which is safe because intake already holds this service's credential;
+they use the internal `EndPointBlank::Authorization.intake_header`, which is not for outbound
+calls.
+
+`TokenUnavailableError` (a subclass of `EndPointBlank::Error`) carries `base_url`, `failure` (the
+`EndPointBlank::AccessTokens::Failure` recorded for the mint, or `nil`), and the shortcuts
+`outcome` and `status`. Its message names the URL and the reason, for example:
+
+```
+EndPointBlank could not mint an access token for https://api.example.com/orders
+(credential_rejected: HTTP 401, invalid credentials). The outbound call cannot be authorized:
+EndPointBlank never sends this service's client credentials to a provider, so there is no
+Basic fallback.
 ```
 
 The argument is the URL you are about to call. intake matches it against registered base URLs by

@@ -161,7 +161,7 @@ module EndPointBlank
           if configuration.token_ttl
             body[:token_ttl] = configuration.token_ttl
           end
-          auth = Authorization.header
+          auth = Authorization.intake_header
           Excon.post(configuration.access_token_url,
             headers: {'Authorization' => auth, 'Content-Type' => 'application/json'},
             body: body.to_json,

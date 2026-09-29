@@ -118,7 +118,7 @@ RSpec.describe EndPointBlank::Rails::Authenticated do
       # Regression for the second missing constant: the command built its header
       # from `AuthorizationGenerate.generate`, which this gem has never defined
       # either, so repairing only the concern's constant would have moved the
-      # NameError one frame deeper. `Authorization.header` already returns a
+      # NameError one frame deeper. `Authorization.intake_header` already returns a
       # complete "Basic <base64>" string -- re-wrapping it would send
       # "Basic Basic ..." and intake would refuse every request.
       controller.authenticate!

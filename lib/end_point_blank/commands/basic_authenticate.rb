@@ -13,18 +13,19 @@ module EndPointBlank
 
         def authenticate(request)
           client_auth = request.headers['Authorization']
-          # `Authorization.header`, as EndpointAuthorize and the JS, Java and
-          # Python ports of this command all use. It previously read
+          # `Authorization.intake_header` (the no-argument `Authorization.header`
+          # before sc-1469), as EndpointAuthorize uses. It previously read
           # `"Basic #{AuthorizationGenerate.generate}"` -- a second constant
           # this gem has never defined, so the only caller of this command
           # could not have reached the network even once the caller's own
           # missing constant was fixed. Fixing one without the other just moves
           # the NameError a frame deeper.
           #
-          # Called with no argument this already returns a complete
-          # "Basic <base64>" string; wrapping it in another "Basic " would send
-          # `Basic Basic ...` and intake would refuse every request.
-          auth = Authorization.header
+          # This already returns a complete "Basic <base64>" string; wrapping
+          # it in another "Basic " would send `Basic Basic ...` and intake
+          # would refuse every request. Basic is right here: this call goes to
+          # this service's own intake, never to a provider.
+          auth = Authorization.intake_header
           body = {
             path: request.route_uri_pattern.to_s.gsub(/\([^)]*\)/, ''),
             http_method: request.request_method,

@@ -58,7 +58,7 @@ RSpec.describe EndPointBlank::Commands::EndpointAuthorize do
     # authorize no longer touches the token cache itself, but clearing it here
     # stops a token minted by some other spec from lingering: a leftover entry
     # would make "never requests an access token" pass even if a regression
-    # reintroduced the Bearer exchange, since Authorization.header would find
+    # reintroduced the Bearer exchange, since Authorization.header(url) would find
     # a cache hit and never call the generator at all.
     EndPointBlank::AccessTokens.instance.clear
     EndPointBlank::Rack::EnvStore.clear

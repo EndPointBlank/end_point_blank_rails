@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased
+
+### Breaking changes
+
+- **Outbound calls never fall back to `Basic` any more (sc-1469).**
+  `EndPointBlank::Authorization.header(base_url)` used to answer
+  `"Basic base64(client_id:client_secret)"` whenever it could not obtain a
+  token -- a failed mint (401, 400/422, 5xx, a response with no `base_url`),
+  an intake timeout or outage -- which sent this service's own credential to
+  the provider it was calling. A client must never do that. It now answers
+  only `"Bearer <token>"`, and raises the new
+  `EndPointBlank::TokenUnavailableError` (a subclass of `EndPointBlank::Error`)
+  when no token can be had. The error carries `base_url`, `failure` (the
+  `AccessTokens::Failure` for the mint), `outcome` and `status`, and its
+  message says the token could not be minted, why, and that credentials are
+  never sent to providers.
+
+  Callers that relied on the fallback must now rescue
+  `TokenUnavailableError` and decide for themselves: retry, degrade, or fail
+  their own request.
+
+- **`Authorization.header` with no argument is removed.** `base_url` is now
+  required, and `header(nil)` / `header("")` raise `ArgumentError`. The
+  no-argument form returned `Basic` credentials and was only ever right for
+  the SDK's own calls to its own intake; those now use the internal
+  `Authorization.intake_header`, which behaves exactly as the old no-argument
+  `header` did. Do not use it for outbound calls to a provider.
+
+  Unchanged: authenticate/authorize, token minting, endpoint updates and the
+  log/request/response writers still authenticate to intake with `Basic`.
+
 ## 0.11.1
 
 ### Fixed
