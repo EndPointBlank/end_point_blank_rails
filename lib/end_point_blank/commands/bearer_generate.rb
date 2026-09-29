@@ -26,6 +26,10 @@ module EndPointBlank
     # Creates a Base64-encoded string from the client_id and client_secret
     # configured in EndPointBlank::Configuration.
     # Use auth_header class method to get a properly formatted "Basic {credentials}" header.
+    #
+    # @deprecated The header carries this service's own client secret and is only valid
+    #   for this service's own EndPointBlank intake (see Authorization.intake_header).
+    #   Never send it to a provider; use Authorization.header(base_url) (sc-1469).
     class BearerGenerate
       include BearerGenerateMethods
     end
