@@ -14,8 +14,10 @@
   `EndPointBlank::TokenUnavailableError` (a subclass of `EndPointBlank::Error`)
   when no token can be had. The error carries `base_url`, `failure` (the
   `AccessTokens::Failure` for the mint), `outcome` and `status`, and its
-  message says the token could not be minted, why, and that credentials are
-  never sent to providers.
+  message reads `Could not mint an EndPointBlank access token for <url>:
+  <reason>. EndPointBlank never sends this service's client_id/client_secret
+  to a provider, so there is no Basic-auth fallback and the call must not be
+  made without a token.`
 
   Callers that relied on the fallback must now rescue
   `TokenUnavailableError` and decide for themselves: retry, degrade, or fail
@@ -30,6 +32,30 @@
 
   Unchanged: authenticate/authorize, token minting, endpoint updates and the
   log/request/response writers still authenticate to intake with `Basic`.
+
+- **A missing `client_id` or `client_secret` raises
+  `EndPointBlank::ConfigurationError`** (a subclass of `EndPointBlank::Error`)
+  when the SDK builds its own Basic header for intake, instead of sending
+  `Basic Og==`. This includes token minting, so `Authorization.header` raises
+  it too rather than reporting a transport error.
+
+### Added
+
+- **`EndPointBlank::AccessTokens.token_result(base_url)`** answers the token
+  String or the `AccessTokens::Failure` recorded for that very call, inside
+  the cache's lock. `token` followed by `last_failure` could report another
+  thread's reason, or none, and `Authorization.header` now uses
+  `token_result` so `TokenUnavailableError#failure` always describes its own
+  mint. `token` and `last_failure` are unchanged.
+
+### Deprecated
+
+- **`EndPointBlank::Commands::BearerGenerate`** (`generate` / `auth_header`)
+  now emits a one-time runtime deprecation warning
+  (`Kernel#warn(..., category: :deprecated)`, shown when
+  `Warning[:deprecated]` is on). Its header carries this service's own client
+  secret; use `EndPointBlank::Authorization.header(base_url)` for outbound
+  calls. It will be removed in a future release.
 
 ## 0.11.1
 

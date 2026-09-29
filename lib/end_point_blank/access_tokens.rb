@@ -103,8 +103,19 @@ module EndPointBlank
       instance.last_failure(base_url)
     end
 
+    def self.token_result(base_url)
+      instance.token_result(base_url)
+    end
+
     # Retrieve a token covering base_url, generating one if no usable entry
     # covers it.
+    #
+    # When this answers nil and the caller wants to know why, it must not ask
+    # {last_failure} afterwards if it needs the reason for THIS call: the
+    # mutex is already released by then, so another thread's successful mint
+    # may have cleared the record, or its own failed mint overwritten it.
+    # {token_result} hands back the reason captured under the mutex instead.
+    #
     # @param base_url [String] the URL you are about to call, with any query
     #   string and fragment removed. It is sent verbatim; intake normalizes it
     #   and matches it against registered base URLs by longest path prefix.
@@ -112,6 +123,23 @@ module EndPointBlank
     #   failed -- which includes a response that carried a token but no
     #   base_url.
     def token(base_url)
+      result = token_result(base_url)
+      result.is_a?(Failure) ? nil : result
+    end
+
+    # {token}, but answering the {Failure} for this call instead of nil.
+    #
+    # The Failure is the one recorded inside the mutex by this call's own
+    # mint, so it describes this call and nothing else. {last_failure} is a
+    # shared, per-URL slot read after the lock is gone; between the two,
+    # another thread can clear it (a successful mint for the same URL) or
+    # replace it (its own failed mint), and a caller building an error from
+    # it would report someone else's reason, or none (sc-1469).
+    #
+    # @param base_url [String] the URL you are about to call; see {token}.
+    # @return [String, Failure] the access token string, or why this call
+    #   could not obtain one.
+    def token_result(base_url)
       entry = match(base_url)
       return entry[:token] if usable?(entry)
 
@@ -168,7 +196,6 @@ module EndPointBlank
           @entries = @entries.reject { |k, _| k == stale }.freeze if stale
 
           record_failure(base_url, result)
-          nil
         end
       end
     end
@@ -286,7 +313,8 @@ module EndPointBlank
       !entry.nil? && entry[:expired_at] > Time.now + REFRESH_WINDOW
     end
 
-    # Log the failure and remember it. Runs inside the mutex.
+    # Log the failure and remember it, and return the Failure recorded.
+    # Runs inside the mutex.
     #
     # The 401 gets its own line, and it is loud: it is the one failure that
     # will not clear on its own, and the one whose remedy is a human action.
@@ -312,10 +340,10 @@ module EndPointBlank
       # can see yet, so mutating it here is safe; only the finished, frozen
       # Hash is published to @failures.
       failures.shift while failures.size >= MAX_FAILURES
-      @failures = failures.merge(
-        base_url => Failure.new(base_url: base_url, outcome: result.outcome, status: result.status,
-                                reason: reason, at: Time.now)
-      ).freeze
+      failure = Failure.new(base_url: base_url, outcome: result.outcome, status: result.status,
+                            reason: reason, at: Time.now)
+      @failures = failures.merge(base_url => failure).freeze
+      failure
     end
 
     # A success wipes the record, so `last_failure` never reports a problem

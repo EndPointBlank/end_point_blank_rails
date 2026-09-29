@@ -2,6 +2,7 @@
 
 require 'base64'
 require_relative 'token_unavailable_error'
+require_relative 'configuration_error'
 
 module EndPointBlank
   module AuthorizationMethods
@@ -36,10 +37,16 @@ module EndPointBlank
                 "outbound calls to a provider are only ever authorized with a Bearer token"
         end
 
-        token = EndPointBlank::AccessTokens.token(base_url)
-        raise TokenUnavailableError.new(base_url, EndPointBlank::AccessTokens.last_failure(base_url)) unless token
+        # The reason must come from this call, captured under the cache's
+        # mutex -- not from `last_failure` read afterwards, which another
+        # thread can clear or overwrite in between.
+        result = EndPointBlank::AccessTokens.token_result(base_url)
+        unless result.is_a?(String)
+          failure = result.is_a?(EndPointBlank::AccessTokens::Failure) ? result : nil
+          raise TokenUnavailableError.new(base_url, failure)
+        end
 
-        "Bearer #{token}"
+        "Bearer #{result}"
       end
 
       # The Basic header for the SDK's own calls to its own intake --
@@ -49,8 +56,22 @@ module EndPointBlank
       #
       # @api private Not for outbound calls to a provider: use {header}.
       # @return [String] "Basic <credentials>"
+      # @raise [ConfigurationError] when client_id or client_secret is nil or
+      #   empty. Interpolating them would silently send `Basic Og==` instead.
       def intake_header
-        "Basic #{Base64.strict_encode64("#{configuration.client_id}:#{configuration.client_secret}")}"
+        client_id = configuration.client_id
+        client_secret = configuration.client_secret
+        missing = []
+        missing << "client_id" if client_id.nil? || client_id.to_s.empty?
+        missing << "client_secret" if client_secret.nil? || client_secret.to_s.empty?
+        unless missing.empty?
+          raise ConfigurationError,
+                "EndPointBlank is missing #{missing.join(" and ")}: set it with EndPointBlank.configure " \
+                "or ENDPOINTBLANK_CLIENT_ID / ENDPOINTBLANK_CLIENT_SECRET. The SDK cannot authenticate " \
+                "to its intake without both."
+        end
+
+        "Basic #{Base64.strict_encode64("#{client_id}:#{client_secret}")}"
       end
     end
 

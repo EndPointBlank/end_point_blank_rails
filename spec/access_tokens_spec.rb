@@ -66,6 +66,70 @@ RSpec.describe EndPointBlank::AccessTokens do
     expect(second).to eq("fresh-token")
     expect(EndPointBlank::Commands::GenerateAccessToken).to have_received(:token_result).once
   end
+
+  # sc-1469: `token` then `last_failure` reads a shared slot after the mutex
+  # is released, so another thread can clear or overwrite it in between.
+  # token_result hands back the Failure recorded inside the lock instead.
+  describe ".token_result" do
+    let(:logger) { double("logger", info: nil, error: nil, warn: nil) }
+
+    before { allow(EndPointBlank).to receive(:logger).and_return(logger) }
+
+    def rejected(status, error)
+      outcome = status == 401 ? :credential_rejected : :server_error
+      EndPointBlank::Commands::AccessTokenResult.new(outcome: outcome, status: status, payload: { error: error })
+    end
+
+    it "answers the token String when one is minted or cached" do
+      cache_token_expiring_in(3600)
+
+      expect(described_class.token_result(base_url)).to eq("cached-token")
+      expect(described_class.token(base_url)).to eq("cached-token")
+    end
+
+    it "answers this call's Failure when no token can be minted" do
+      allow(EndPointBlank::Commands::GenerateAccessToken).to receive(:token_result)
+        .and_return(rejected(401, "invalid credentials"))
+
+      result = described_class.token_result(base_url)
+
+      expect(result).to be_a(EndPointBlank::AccessTokens::Failure)
+      expect(result).to have_attributes(base_url: base_url, outcome: :credential_rejected, status: 401,
+                                        reason: "invalid credentials")
+      # The shared slot is still written, for callers of last_failure.
+      expect(described_class.last_failure(base_url)).to equal(result)
+    end
+
+    it "keeps its own Failure when another thread clears the shared record straight after" do
+      allow(EndPointBlank::Commands::GenerateAccessToken).to receive(:token_result)
+        .and_return(rejected(401, "invalid credentials"))
+
+      result = described_class.token_result(base_url)
+      instance.clear # e.g. another thread's successful mint for the same URL
+
+      expect(described_class.last_failure(base_url)).to be_nil
+      expect(result.outcome).to eq(:credential_rejected)
+    end
+
+    it "keeps its own Failure when another thread overwrites the shared record straight after" do
+      allow(EndPointBlank::Commands::GenerateAccessToken).to receive(:token_result)
+        .and_return(rejected(401, "invalid credentials"), rejected(500, "boom"))
+
+      mine = described_class.token_result(base_url)
+      theirs = described_class.token_result(base_url)
+
+      expect(described_class.last_failure(base_url)).to equal(theirs)
+      expect(mine).to have_attributes(outcome: :credential_rejected, status: 401)
+      expect(theirs).to have_attributes(outcome: :server_error, status: 500)
+    end
+
+    it "leaves token answering nil on failure, as before" do
+      allow(EndPointBlank::Commands::GenerateAccessToken).to receive(:token_result)
+        .and_return(rejected(401, "invalid credentials"))
+
+      expect(described_class.token(base_url)).to be_nil
+    end
+  end
 end
 # rubocop:enable Metrics/BlockLength
 

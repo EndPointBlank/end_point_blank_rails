@@ -52,9 +52,9 @@ module EndPointBlank
           "no reason was recorded"
         end
 
-      "EndPointBlank could not mint an access token for #{base_url} (#{why}). " \
-        "The outbound call cannot be authorized: EndPointBlank never sends this " \
-        "service's client credentials to a provider, so there is no Basic fallback."
+      "Could not mint an EndPointBlank access token for #{base_url}: #{why}. " \
+        "EndPointBlank never sends this service's client_id/client_secret to a provider, " \
+        "so there is no Basic-auth fallback and the call must not be made without a token."
     end
   end
 end

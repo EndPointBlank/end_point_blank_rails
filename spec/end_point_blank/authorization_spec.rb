@@ -115,9 +115,14 @@ RSpec.describe EndPointBlank::Authorization do
             expect(error.outcome).to eq(outcome)
             expect(error.status).to eq(status)
             expect(error.failure).to eq(EndPointBlank::AccessTokens.last_failure(base_url))
-            expect(error.message).to include("could not mint an access token for #{base_url}")
+            detail = status ? "HTTP #{status}, " : ""
+            expect(error.message).to eq(
+              "Could not mint an EndPointBlank access token for #{base_url}: " \
+              "#{outcome}: #{detail}#{error.failure.reason}. " \
+              "EndPointBlank never sends this service's client_id/client_secret to a provider, " \
+              "so there is no Basic-auth fallback and the call must not be made without a token."
+            )
             expect(error.message).to match(reason)
-            expect(error.message).to include("never sends this service's client credentials to a provider")
             expect(error.message).not_to include("csecret")
           }
         end
@@ -131,6 +136,94 @@ RSpec.describe EndPointBlank::Authorization do
             .to be_empty
         end
       end
+    end
+
+    it "words the error exactly, reason included" do
+      record_posts { double("response", status: 401, body: JSON.generate(error: "invalid credentials")) }
+
+      expect { described_class.header(base_url) }.to raise_error(
+        EndPointBlank::TokenUnavailableError,
+        "Could not mint an EndPointBlank access token for https://authorization-spec.example.test/orders: " \
+        "credential_rejected: HTTP 401, invalid credentials. EndPointBlank never sends this service's " \
+        "client_id/client_secret to a provider, so there is no Basic-auth fallback and the call must " \
+        "not be made without a token."
+      )
+    end
+
+    it "says so when no reason was recorded" do
+      expect(EndPointBlank::TokenUnavailableError.new(base_url).message).to eq(
+        "Could not mint an EndPointBlank access token for #{base_url}: no reason was recorded. " \
+        "EndPointBlank never sends this service's client_id/client_secret to a provider, so there is " \
+        "no Basic-auth fallback and the call must not be made without a token."
+      )
+    end
+
+    # sc-1469 review: `header` used to call `token` and then `last_failure`
+    # after the cache's mutex was released, so another thread could clear the
+    # record (a successful mint for the same URL) or overwrite it (its own
+    # failed mint) in between, and the error reported someone else's reason
+    # or none. Each example below does that other thread's work at exactly
+    # that moment -- right after this call's mint returns.
+    describe "reporting this call's own failure, not the shared record" do
+      let(:answer) { { status: 401, body: JSON.generate(error: "invalid credentials") } }
+
+      before do
+        record_posts { double("response", **answer) }
+      end
+
+      def after_this_mint(&other_thread)
+        allow(EndPointBlank::AccessTokens.instance).to receive(:token_result).and_wrap_original do |original, url|
+          result = original.call(url)
+          other_thread.call
+          result
+        end
+      end
+
+      it "when another thread clears the record straight after" do
+        after_this_mint { EndPointBlank::AccessTokens.instance.clear }
+
+        expect { described_class.header(base_url) }.to raise_error(EndPointBlank::TokenUnavailableError) { |error|
+          expect(EndPointBlank::AccessTokens.last_failure(base_url)).to be_nil
+          expect(error.outcome).to eq(:credential_rejected)
+          expect(error.status).to eq(401)
+          expect(error.message).to include("credential_rejected: HTTP 401, invalid credentials")
+        }
+      end
+
+      it "when another thread's failed mint overwrites the record straight after" do
+        after_this_mint do
+          answer.replace(status: 500, body: "oops")
+          # Straight to GenerateAccessToken's result through the cache's own
+          # recording path, bypassing the wrapper above.
+          EndPointBlank::AccessTokens.instance.send(
+            :record_failure, base_url, EndPointBlank::Commands::GenerateAccessToken.token_result(base_url)
+          )
+        end
+
+        expect { described_class.header(base_url) }.to raise_error(EndPointBlank::TokenUnavailableError) { |error|
+          expect(EndPointBlank::AccessTokens.last_failure(base_url).outcome).to eq(:server_error)
+          expect(error.outcome).to eq(:credential_rejected)
+          expect(error.status).to eq(401)
+          expect(error.message).to include("credential_rejected: HTTP 401, invalid credentials")
+        }
+      end
+
+      it "never reads the shared record at all" do
+        allow(EndPointBlank::AccessTokens).to receive(:last_failure).and_call_original
+
+        expect { described_class.header(base_url) }.to raise_error(EndPointBlank::TokenUnavailableError)
+        expect(EndPointBlank::AccessTokens).not_to have_received(:last_failure)
+      end
+    end
+
+    it "raises ConfigurationError, sending nothing, when the client credentials are missing" do
+      record_posts { minted }
+      configuration.client_secret = nil
+      allow(ENV).to receive(:[]).and_call_original
+      allow(ENV).to receive(:[]).with("ENDPOINTBLANK_CLIENT_SECRET").and_return(nil)
+
+      expect { described_class.header(base_url) }.to raise_error(EndPointBlank::ConfigurationError, /client_secret/)
+      expect(calls).to be_empty
     end
 
     it "has no no-target form: calling it without a URL is an ArgumentError" do
@@ -155,6 +248,43 @@ RSpec.describe EndPointBlank::Authorization do
       configuration.client_secret = "s" * 60
 
       expect(described_class.intake_header).not_to include("\n")
+    end
+
+    # sc-1469 turned `client_id + ":" + client_secret` (which raised on nil)
+    # into interpolation, which would quietly send `Basic Og==` -- base64 of
+    # ":" -- and have intake reject it as though the credential were revoked.
+    context "when a client credential is missing" do
+      before do
+        allow(ENV).to receive(:[]).and_call_original
+        allow(ENV).to receive(:[]).with("ENDPOINTBLANK_CLIENT_ID").and_return(nil)
+        allow(ENV).to receive(:[]).with("ENDPOINTBLANK_CLIENT_SECRET").and_return(nil)
+      end
+
+      {
+        "client_id is nil" => [{ client_id: nil }, /missing client_id:/],
+        "client_id is empty" => [{ client_id: "" }, /missing client_id:/],
+        "client_secret is nil" => [{ client_secret: nil }, /missing client_secret:/],
+        "client_secret is empty" => [{ client_secret: "" }, /missing client_secret:/],
+        "both are nil" => [{ client_id: nil, client_secret: nil }, /missing client_id and client_secret:/]
+      }.each do |situation, (settings, message)|
+        it "raises ConfigurationError when #{situation}, never sending Basic Og==" do
+          settings.each { |key, value| configuration.public_send(:"#{key}=", value) }
+
+          expect { described_class.intake_header }.to raise_error(EndPointBlank::ConfigurationError, message) { |error|
+            expect(error).to be_a(EndPointBlank::Error)
+            expect(error.message).not_to include("csecret")
+          }
+        end
+      end
+
+      it "stops the SDK's own calls to intake instead of sending an empty credential" do
+        record_posts { double("response", status: 201, body: "{}") }
+        configuration.client_id = nil
+
+        expect { EndPointBlank::Writers::DirectWriter.new("https://intake.example.test/logs").write([{ a: 1 }]) }
+          .to raise_error(EndPointBlank::ConfigurationError)
+        expect(calls).to be_empty
+      end
     end
   end
 
@@ -212,5 +342,38 @@ RSpec.describe EndPointBlank::Commands::BearerGenerate do
 
   it "builds a complete Basic header" do
     expect(described_class.auth_header).to eq("Basic #{Base64.strict_encode64("cid:csecret")}")
+  end
+
+  describe "the runtime deprecation warning" do
+    around do |example|
+      deprecated = Warning[:deprecated]
+      Warning[:deprecated] = true
+      described_class.remove_instance_variable(:@deprecation_warned) if described_class.instance_variable_defined?(:@deprecation_warned)
+      example.run
+    ensure
+      Warning[:deprecated] = deprecated
+    end
+
+    it "is emitted once, through the :deprecated category, however many times it is called" do
+      allow(Warning).to receive(:warn).and_call_original
+
+      expect do
+        described_class.generate
+        described_class.auth_header
+        described_class.generate
+      end.to output(/BearerGenerate is deprecated.*Authorization\.header\(base_url\)/).to_stderr
+
+      expect(Warning).to have_received(:warn).with(/BearerGenerate is deprecated/, category: :deprecated).once
+    end
+
+    it "is emitted from auth_header too" do
+      expect { described_class.auth_header }.to output(/BearerGenerate is deprecated/).to_stderr
+    end
+
+    it "is silent while Ruby's deprecation warnings are off" do
+      Warning[:deprecated] = false
+
+      expect { described_class.generate }.not_to output.to_stderr
+    end
   end
 end

@@ -3,6 +3,7 @@
 require 'excon'
 require "json"
 require_relative 'http'
+require_relative '../configuration_error'
 
 module EndPointBlank
   module Commands
@@ -125,6 +126,10 @@ module EndPointBlank
           return transport_error(payload) unless status.is_a?(Integer)
 
           AccessTokenResult.new(outcome: outcome_for(status, payload), status: status, payload: payload)
+        rescue ConfigurationError
+          # Missing client credentials are not a transport error: nothing was
+          # sent, and retrying cannot help. Let it be seen (sc-1469).
+          raise
         rescue => e
           # Reached only when there is no status to classify on: the request
           # never completed, or the response object would not yield one.

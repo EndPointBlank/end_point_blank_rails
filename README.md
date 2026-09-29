@@ -206,11 +206,15 @@ calls.
 `outcome` and `status`. Its message names the URL and the reason, for example:
 
 ```
-EndPointBlank could not mint an access token for https://api.example.com/orders
-(credential_rejected: HTTP 401, invalid credentials). The outbound call cannot be authorized:
-EndPointBlank never sends this service's client credentials to a provider, so there is no
-Basic fallback.
+Could not mint an EndPointBlank access token for https://api.example.com/orders:
+credential_rejected: HTTP 401, invalid credentials. EndPointBlank never sends this service's
+client_id/client_secret to a provider, so there is no Basic-auth fallback and the call must not
+be made without a token.
 ```
+
+The SDK's own calls to its intake raise `EndPointBlank::ConfigurationError` (also a subclass of
+`EndPointBlank::Error`) when `client_id` or `client_secret` is missing or empty, rather than
+sending an empty `Basic` credential.
 
 The argument is the URL you are about to call. intake matches it against registered base URLs by
 longest path prefix, so you need not know how the target registered itself -- `header` for
@@ -224,13 +228,14 @@ an unregistered path) simply misses and mints a new token -- it never guesses.
 
 `EndPointBlank::AccessTokens.token` answers with a token String or `nil`, which is all most
 callers need. When `nil` is not enough — when you want to know whether retrying could possibly
-help — ask what went wrong:
+help — call `token_result` instead, which answers with the token or the `Failure` for that call:
 
 ```ruby
 url = "https://api.example.com/orders"
+result = EndPointBlank::AccessTokens.token_result(url)
 
-if EndPointBlank::AccessTokens.token(url).nil?
-  failure = EndPointBlank::AccessTokens.last_failure(url)
+if result.is_a?(EndPointBlank::AccessTokens::Failure)
+  failure = result
 
   case failure.outcome
   when :credential_rejected
@@ -247,8 +252,11 @@ if EndPointBlank::AccessTokens.token(url).nil?
 end
 ```
 
-`last_failure` returns `nil` once a mint for that URL succeeds again, so it never reports a
-problem that has already cleared. A `Failure` carries `base_url`, `outcome`, `status` (the HTTP
+`EndPointBlank::AccessTokens.last_failure(url)` still answers the last failure recorded for a
+URL, and returns `nil` once a mint for that URL succeeds again, so it never reports a problem
+that has already cleared. It is a shared slot, though: read after `token` returned `nil`, another
+thread may already have cleared or replaced it. When you need the reason for your own call, use
+`token_result`, whose `Failure` is captured inside the cache's lock for that call. A `Failure` carries `base_url`, `outcome`, `status` (the HTTP
 status, or `nil` when no usable one was obtained), `reason`, and `at`, and answers
 `#credential_rejected?`, `#request_rejected?`, `#server_error?` and `#transport_error?`.
 
