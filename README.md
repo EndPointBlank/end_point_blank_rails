@@ -178,8 +178,9 @@ a client must never send its own `client_id` / `client_secret` to a provider or 
 intake. When no token can be obtained it raises `EndPointBlank::TokenUnavailableError` instead.
 
 ```ruby
-# Pass the URL you are about to call, NOT a hostname.
-# Strip any query string or fragment first -- intake rejects both.
+# Pass the URL you are about to call, NOT a hostname. Its userinfo, query and
+# fragment are removed before the token request; they are never sent to
+# intake, logged, or kept on the error.
 url = "https://api.example.com/orders"
 
 begin
@@ -195,22 +196,35 @@ end
 ```
 
 `base_url` is required. Until this release `header` with no argument returned `Basic` credentials; that
-form is gone, and `header(nil)` or `header("")` raises `ArgumentError`. The SDK's own calls to its
+form is gone, and `header(nil)` or `header("")` raises `ArgumentError`, as does a URL that cannot be
+parsed into a scheme and host (nothing is sent, and the message does not repeat the URL). The SDK's own calls to its
 own intake (authorize, token minting, endpoint updates, the log/request/response writers) still
 authenticate with `Basic`, which is safe because intake already holds this service's credential;
 they use the internal `EndPointBlank::Authorization.intake_header`, which is not for outbound
 calls.
 
-`TokenUnavailableError` (a subclass of `EndPointBlank::Error`) carries `base_url`, `failure` (the
+`TokenUnavailableError` (a subclass of `EndPointBlank::Error`) carries `base_url` (the URL with its
+userinfo, query and fragment removed; the raw value is never kept), `failure` (the
 `EndPointBlank::AccessTokens::Failure` recorded for the mint, or `nil`), and the shortcuts
-`outcome` and `status`. Its message names the URL and the reason, for example:
+`outcome` and `status`. Its message names the stripped URL and a fixed reason for the outcome
+-- never intake's response body, which stays on `failure.reason` -- for example:
 
 ```
 Could not mint an EndPointBlank access token for https://api.example.com/orders:
-credential_rejected: HTTP 401, invalid credentials. EndPointBlank never sends this service's
-client_id/client_secret to a provider, so there is no Basic-auth fallback and the call must not
-be made without a token.
+intake rejected this application's client credential (HTTP 401); retrying cannot help --
+re-issue the credential. EndPointBlank never sends this service's client_id/client_secret to a
+provider, so there is no Basic-auth fallback and the call must not be made without a token.
 ```
+
+| `outcome` | Reason in the message |
+|---|---|
+| `:credential_rejected` | `intake rejected this application's client credential (HTTP 401); retrying cannot help -- re-issue the credential` |
+| `:request_rejected` | `intake refused the token request (HTTP <status>); check the URL and that a grant covers the target` |
+| `:server_error` | `intake failed to issue a token (HTTP <status>); this may be transient` |
+| `:transport_error` | `intake could not be reached (timeout, connection refused or retries exhausted); this may be transient` |
+| none recorded | `the token request failed for an unknown reason` |
+
+` (HTTP <status>)` is left out when there is no status.
 
 The SDK's own calls to its intake raise `EndPointBlank::ConfigurationError` (also a subclass of
 `EndPointBlank::Error`) when `client_id` or `client_secret` is missing or empty, rather than
@@ -221,8 +235,9 @@ longest path prefix, so you need not know how the target registered itself -- `h
 `https://api.example.com/orders/42` reuses a token already cached for
 `https://api.example.com/orders`. `EndPointBlank::AccessTokens` caches one token per base URL
 intake resolves to, not one per process, so a service that calls several targets holds a token
-for each. A URL that does not match character-for-character (a different case, a query string,
-an unregistered path) simply misses and mints a new token -- it never guesses.
+for each. The lookup uses the URL with its userinfo, query and fragment removed; beyond that, a URL
+that does not match character-for-character (a different case, an unregistered path) simply
+misses and mints a new token -- it never guesses.
 
 ### Why a token could not be minted
 
@@ -259,6 +274,12 @@ thread may already have cleared or replaced it. When you need the reason for you
 `token_result`, whose `Failure` is captured inside the cache's lock for that call. A `Failure` carries `base_url`, `outcome`, `status` (the HTTP
 status, or `nil` when no usable one was obtained), `reason`, and `at`, and answers
 `#credential_rejected?`, `#request_rejected?`, `#server_error?` and `#transport_error?`.
+
+`token`, `token_result`, `exists?` and `last_failure` all remove the URL's userinfo, query and
+fragment first, so the cache, the failure record (and its `base_url`) and the log lines only ever
+hold the stripped URL. A URL that cannot be parsed into a scheme and host is never sent:
+`token_result` answers a `:request_rejected` `Failure` with no `status` and no `base_url`, and
+nothing is recorded.
 
 There is deliberately no `#retriable?` or other single retry/no-retry boolean. Retrying a `400`
 or a `422` is exactly as futile as retrying a `401` — intake answers `400` for an invalid

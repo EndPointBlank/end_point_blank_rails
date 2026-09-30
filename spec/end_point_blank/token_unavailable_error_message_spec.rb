@@ -17,8 +17,16 @@ RSpec.describe EndPointBlank::TokenUnavailableError do
     end
   end
 
-  it "keeps the raw URL on #base_url" do
-    expect(described_class.new(raw).base_url).to eq(raw)
+  # sc-1469 review ruling (a): the raw URL is not kept anywhere on the error.
+  # Error reporters capture attributes as well as the message, and the
+  # caller already has the raw value.
+  it "keeps only the stripped URL on #base_url" do
+    expect(described_class.new(raw).base_url).to eq("https://api.provider.test:8443/v1/things")
+  end
+
+  it "keeps an IPv6 host in brackets and drops only the default port" do
+    expect(described_class.new("https://[::1]:443/v1?x=1").base_url).to eq("https://[::1]/v1")
+    expect(described_class.new("http://[::1]:8080/v1#f").base_url).to eq("http://[::1]:8080/v1")
   end
 
   it "leaves an unparseable URL out of the message" do
@@ -26,5 +34,6 @@ RSpec.describe EndPointBlank::TokenUnavailableError do
 
     expect(message).not_to include("s3cret")
     expect(message).to include("could not be parsed")
+    expect(described_class.new("not a url ?token=s3cret").base_url).to be_nil
   end
 end

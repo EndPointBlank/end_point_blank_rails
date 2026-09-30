@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require "uri"
+require_relative "target_url"
 
 module EndPointBlank
   # Reopened with the same superclass in end_point_blank.rb; declared here too
@@ -17,6 +17,12 @@ module EndPointBlank
   # be authorized and the caller has to decide what to do: retry, degrade, or
   # fail its own request.
   #
+  # `base_url` is the URL the token was wanted for with its userinfo, query
+  # and fragment removed ({TargetUrl.strip}), or nil when it could not be
+  # parsed. The raw value is never kept: the caller already has it, and a
+  # field on an exception reaches error reporting as surely as the message
+  # does.
+  #
   # `failure` is the {AccessTokens::Failure} recorded for the mint, when one
   # was recorded, so a handler can branch on `failure.outcome`
   # (:credential_rejected, :request_rejected, :server_error,
@@ -28,7 +34,7 @@ module EndPointBlank
     # @param base_url [String] the URL the token was wanted for
     # @param failure [AccessTokens::Failure, nil] why the mint failed
     def initialize(base_url, failure = nil)
-      @base_url = base_url
+      @base_url = TargetUrl.strip(base_url)
       @failure = failure
       super(build_message)
     end
@@ -45,33 +51,34 @@ module EndPointBlank
 
     private
 
-    # Scheme, host and path only. The caller controls base_url, and its
-    # userinfo, query or fragment can carry a secret; the message is what
-    # reaches logs and error reporting, so they are dropped here. The raw
-    # value stays on #base_url.
-    def describe_url
-      uri = URI.parse(base_url.to_s)
-      return UNPARSEABLE_URL unless uri.scheme && uri.host && !uri.host.empty?
-
-      port = uri.port && uri.port != uri.default_port ? ":#{uri.port}" : ""
-      "#{uri.scheme}://#{uri.host}#{port}#{uri.path}"
-    rescue URI::Error
-      UNPARSEABLE_URL
-    end
-
     UNPARSEABLE_URL = "the requested URL (not shown: it could not be parsed)"
     private_constant :UNPARSEABLE_URL
 
-    def build_message
-      why =
-        if failure
-          detail = failure.status ? "HTTP #{failure.status}, " : ""
-          "#{failure.outcome}: #{detail}#{failure.reason}"
-        else
-          "no reason was recorded"
-        end
+    # One fixed text per outcome, the same in every EndPointBlank SDK. Never
+    # intake's response body (Failure#reason) or an exception message: the
+    # message is what reaches logs and error reporting, and neither is ours
+    # to vouch for. Failure#reason stays available on #failure.
+    def reason
+      http = status ? " (HTTP #{status})" : ""
 
-      "Could not mint an EndPointBlank access token for #{describe_url}: #{why}. " \
+      case outcome
+      when :credential_rejected
+        "intake rejected this application's client credential#{http}; " \
+          "retrying cannot help -- re-issue the credential"
+      when :request_rejected
+        "intake refused the token request#{http}; check the URL and that a grant covers the target"
+      when :server_error
+        "intake failed to issue a token#{http}; this may be transient"
+      when :transport_error
+        "intake could not be reached (timeout, connection refused or retries exhausted); " \
+          "this may be transient"
+      else
+        "the token request failed for an unknown reason"
+      end
+    end
+
+    def build_message
+      "Could not mint an EndPointBlank access token for #{base_url || UNPARSEABLE_URL}: #{reason}. " \
         "EndPointBlank never sends this service's client_id/client_secret to a provider, " \
         "so there is no Basic-auth fallback and the call must not be made without a token."
     end

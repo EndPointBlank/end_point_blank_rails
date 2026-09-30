@@ -16,7 +16,7 @@ RSpec.describe EndPointBlank::Commands::GenerateAccessToken do
   it "passes explicit connect and read timeouts to Excon" do
     allow(Excon).to receive(:post).and_return(double(status: 200, body: "{}"))
 
-    described_class.token("host.example.com")
+    described_class.token("https://host.example.com")
 
     expect(Excon).to have_received(:post).with(
       configuration.access_token_url,
@@ -29,7 +29,7 @@ RSpec.describe EndPointBlank::Commands::GenerateAccessToken do
     allow(Excon).to receive(:post).and_raise(Excon::Error::Timeout.new("timed out"))
 
     result = nil
-    expect { result = described_class.token("host.example.com") }.not_to raise_error
+    expect { result = described_class.token("https://host.example.com") }.not_to raise_error
     expect(result).to be_nil
   end
 
@@ -44,6 +44,29 @@ RSpec.describe EndPointBlank::Commands::GenerateAccessToken do
       expect(message).to include("201")
       expect(message).not_to include("tok-secret-value")
     end
+  end
+
+  # sc-1469: intake refuses a base_url with userinfo, a query or a fragment,
+  # and any of them can carry a secret, so the body never carries them --
+  # even when this is called directly rather than through AccessTokens.
+  it "sends intake only the scheme, host, port and path of the URL" do
+    allow(Excon).to receive(:post).and_return(double(status: 500, body: "{}"))
+
+    described_class.token_result("https://user:hunter2@example.com:8443/orders?api_key=s3cret#frag")
+
+    expect(Excon).to have_received(:post) do |_url, options|
+      expect(JSON.parse(options[:body])["base_url"]).to eq("https://example.com:8443/orders")
+    end
+  end
+
+  it "refuses an unparseable URL without a request" do
+    allow(Excon).to receive(:post)
+
+    result = described_class.token_result("not a url ?token=s3cret")
+
+    expect(result).to have_attributes(outcome: :request_rejected, status: nil, payload: nil)
+    expect(Excon).not_to have_received(:post)
+    expect(logger).to have_received(:error).with(satisfy { |line| !line.include?("s3cret") })
   end
 
   # sc-189. intake's access-token endpoint answers 201 on success, 400 for a

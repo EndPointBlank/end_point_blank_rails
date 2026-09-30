@@ -12,16 +12,33 @@
   the provider it was calling. A client must never do that. It now answers
   only `"Bearer <token>"`, and raises the new
   `EndPointBlank::TokenUnavailableError` (a subclass of `EndPointBlank::Error`)
-  when no token can be had. The error carries `base_url`, `failure` (the
-  `AccessTokens::Failure` for the mint), `outcome` and `status`, and its
-  message reads `Could not mint an EndPointBlank access token for <url>:
-  <reason>. EndPointBlank never sends this service's client_id/client_secret
-  to a provider, so there is no Basic-auth fallback and the call must not be
-  made without a token.`
+  when no token can be had. The error carries `base_url` (stripped, see
+  below), `failure` (the `AccessTokens::Failure` for the mint), `outcome`
+  and `status`, and its message reads `Could not mint an EndPointBlank access
+  token for <url>: <reason>. EndPointBlank never sends this service's
+  client_id/client_secret to a provider, so there is no Basic-auth fallback
+  and the call must not be made without a token.` `<reason>` is one fixed
+  text per outcome, the same in every EndPointBlank SDK (for example
+  `intake refused the token request (HTTP 422); check the URL and that a
+  grant covers the target`); intake's response body and exception messages
+  never appear in it. The body is still on `failure.reason`.
 
   Callers that relied on the fallback must now rescue
   `TokenUnavailableError` and decide for themselves: retry, degrade, or fail
   their own request.
+
+- **The URL's userinfo, query and fragment are removed before the token
+  request (sc-1469).** They are never sent to intake, logged, or kept on the
+  error: `Authorization.header` and the public `AccessTokens` entry points
+  (`token`, `token_result`, `exists?`, `last_failure`) strip the URL to
+  scheme, host, port and path first, and the cache, the failure record and
+  every log line use that form. `TokenUnavailableError#base_url` is the
+  stripped URL, not the one passed in. intake refuses a `base_url` carrying
+  any of them, so a URL that used to fail its mint with a 422 now mints. A
+  URL that cannot be parsed into a scheme and host is refused without a
+  request: `header` raises `ArgumentError` (without repeating the URL), and
+  `AccessTokens.token_result` answers a `:request_rejected` `Failure` with no
+  status.
 
 - **`Authorization.header` with no argument is removed.** `base_url` is now
   required, and `header(nil)` / `header("")` raise `ArgumentError`. The

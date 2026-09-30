@@ -2,6 +2,7 @@
 
 require 'singleton'
 require "time"
+require_relative "target_url"
 
 module EndPointBlank
   # Thread-safe singleton holding this process's access tokens, one per
@@ -12,6 +13,11 @@ module EndPointBlank
   # URL it is about to call; intake answers with the base URL of the
   # environment that URL belongs to, and subsequent calls anywhere under that
   # base URL reuse the entry.
+  #
+  # Every public entry point strips the caller's URL to scheme, host, port
+  # and path first ({TargetUrl.strip}), so userinfo, a query or a fragment
+  # never reaches intake, a cache or failure key, or a log line. A URL that
+  # cannot be parsed is refused without a request (sc-1469).
   #
   # Lookup is a plain exact-or-path-prefix comparison, with the longest match
   # winning. The SDK deliberately does not normalize: intake owns that rule,
@@ -116,9 +122,10 @@ module EndPointBlank
     # may have cleared the record, or its own failed mint overwritten it.
     # {token_result} hands back the reason captured under the mutex instead.
     #
-    # @param base_url [String] the URL you are about to call, with any query
-    #   string and fragment removed. It is sent verbatim; intake normalizes it
-    #   and matches it against registered base URLs by longest path prefix.
+    # @param base_url [String] the URL you are about to call. Its userinfo,
+    #   query and fragment are removed ({TargetUrl.strip}); the rest is sent
+    #   as-is, and intake normalizes it and matches it against registered
+    #   base URLs by longest path prefix.
     # @return [String, nil] The access token string, or nil if generation
     #   failed -- which includes a response that carried a token but no
     #   base_url.
@@ -138,8 +145,13 @@ module EndPointBlank
     #
     # @param base_url [String] the URL you are about to call; see {token}.
     # @return [String, Failure] the access token string, or why this call
-    #   could not obtain one.
+    #   could not obtain one. A URL that cannot be parsed answers a
+    #   :request_rejected Failure with no status and no base_url, and nothing
+    #   is sent to intake or recorded.
     def token_result(base_url)
+      base_url = TargetUrl.strip(base_url)
+      return unparseable_url_failure if base_url.nil?
+
       entry = match(base_url)
       return entry[:token] if usable?(entry)
 
@@ -208,9 +220,9 @@ module EndPointBlank
     # one that wants to know whether to give up or try again asks here.
     #
     # Scope: one record per base URL, keyed on the URL as it was passed to
-    # `token` rather than on whatever intake resolved it to -- a failed mint
-    # often has no resolved base URL to speak of, and the caller has only the
-    # URL it asked with. The map is bounded; see MAX_FAILURES.
+    # `token` (stripped) rather than on whatever intake resolved it to -- a
+    # failed mint often has no resolved base URL to speak of, and the caller
+    # has only the URL it asked with. The map is bounded; see MAX_FAILURES.
     #
     # Reads @failures exactly the way `match` reads @entries: one atomic read
     # of the ivar, no mutex, and every write inside the mutex REPLACES the
@@ -219,9 +231,13 @@ module EndPointBlank
     # a half-built map. Being a frozen Data, the Failure handed back needs no
     # defensive copy.
     #
-    # @param base_url [String] the URL that was asked about
+    # @param base_url [String] the URL that was asked about; stripped the
+    #   same way {token_result} strips it before keying the record.
     # @return [Failure, nil]
     def last_failure(base_url)
+      base_url = TargetUrl.strip(base_url)
+      return nil if base_url.nil?
+
       @failures[base_url]
     end
 
@@ -267,7 +283,7 @@ module EndPointBlank
     # @param base_url [String] the URL to check coverage for
     # @return [Boolean]
     def exists?(base_url)
-      entry = match(base_url)
+      entry = match(TargetUrl.strip(base_url))
       !entry.nil? && entry[:expired_at] > Time.now + PRESENCE_WINDOW
     end
 
@@ -311,6 +327,14 @@ module EndPointBlank
 
     def usable?(entry)
       !entry.nil? && entry[:expired_at] > Time.now + REFRESH_WINDOW
+    end
+
+    # What {token_result} answers for a URL {TargetUrl.strip} refused. Not
+    # logged and not recorded: there is no stripped URL to key or name it
+    # by, and the raw one may carry a secret.
+    def unparseable_url_failure
+      Failure.new(base_url: nil, outcome: :request_rejected, status: nil,
+                  reason: "the URL could not be parsed, so no token was requested", at: Time.now)
     end
 
     # Log the failure and remember it, and return the Failure recorded.

@@ -3,6 +3,7 @@
 require 'base64'
 require_relative 'token_unavailable_error'
 require_relative 'configuration_error'
+require_relative 'target_url'
 
 module EndPointBlank
   module AuthorizationMethods
@@ -20,13 +21,15 @@ module EndPointBlank
       # reached at all (timeout, refused connection) -- this raises rather
       # than falling back to Basic.
       #
-      # @param base_url [String] the URL you are about to call, with any
-      #   query string and fragment removed. A token covering it is used,
-      #   minting one if necessary.
+      # @param base_url [String] the URL you are about to call. A token
+      #   covering it is used, minting one if necessary. Its userinfo, query
+      #   and fragment are removed first ({TargetUrl.strip}): they are never
+      #   sent to intake, logged, or kept on the error.
       # @return [String] "Bearer <token>"
-      # @raise [ArgumentError] when base_url is nil or empty. There is no
-      #   no-target form any more: the old `header` with no argument returned
-      #   Basic credentials, and the calls to intake itself now use
+      # @raise [ArgumentError] when base_url is nil or empty, or cannot be
+      #   parsed into a scheme and host; nothing is sent anywhere. There is
+      #   no no-target form any more: the old `header` with no argument
+      #   returned Basic credentials, and the calls to intake itself now use
       #   {intake_header}.
       # @raise [TokenUnavailableError] when no token can be obtained; its
       #   `failure` says why.
@@ -37,13 +40,22 @@ module EndPointBlank
                 "outbound calls to a provider are only ever authorized with a Bearer token"
         end
 
+        # The raw URL is not repeated in the message: it is what could not
+        # be parsed, and it may carry a secret.
+        target = TargetUrl.strip(base_url)
+        if target.nil?
+          raise ArgumentError,
+                "EndPointBlank::Authorization.header could not parse the URL it was given " \
+                "(not shown); pass an absolute URL with a scheme and host"
+        end
+
         # The reason must come from this call, captured under the cache's
         # mutex -- not from `last_failure` read afterwards, which another
         # thread can clear or overwrite in between.
-        result = EndPointBlank::AccessTokens.token_result(base_url)
+        result = EndPointBlank::AccessTokens.token_result(target)
         unless result.is_a?(String)
           failure = result.is_a?(EndPointBlank::AccessTokens::Failure) ? result : nil
-          raise TokenUnavailableError.new(base_url, failure)
+          raise TokenUnavailableError.new(target, failure)
         end
 
         "Bearer #{result}"

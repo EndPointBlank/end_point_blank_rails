@@ -4,6 +4,7 @@ require 'excon'
 require "json"
 require_relative 'http'
 require_relative '../configuration_error'
+require_relative '../target_url'
 
 module EndPointBlank
   module Commands
@@ -105,10 +106,20 @@ module EndPointBlank
 
         # Mint an access token, reporting what actually happened.
         #
-        # @param base_url [String] the URL a token is wanted for.
-        # @return [AccessTokenResult] never nil.
+        # @param base_url [String] the URL a token is wanted for. Its
+        #   userinfo, query and fragment are never sent ({TargetUrl.strip}).
+        # @return [AccessTokenResult] never nil. A URL that cannot be parsed
+        #   is :request_rejected with no status, and nothing is sent.
         def token_result(base_url)
-          response = post_token_request(base_url)
+          # Defensive: AccessTokens already strips, but this is callable on
+          # its own and must not put a raw URL in the request body either.
+          target = TargetUrl.strip(base_url)
+          if target.nil?
+            EndPointBlank.logger.error "Access token not requested: the URL could not be parsed (not shown)"
+            return AccessTokenResult.new(outcome: :request_rejected, status: nil, payload: nil)
+          end
+
+          response = post_token_request(target)
 
           status = response.status
           EndPointBlank.logger.info "Authentication response: #{status}"

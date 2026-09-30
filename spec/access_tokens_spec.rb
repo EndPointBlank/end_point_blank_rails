@@ -242,9 +242,9 @@ RSpec.describe "EndPointBlank::AccessTokens against the token endpoint" do
 
     # The SDK does not normalize -- intake owns that rule. A URL that does not
     # match character-for-character costs one extra request, which is cheaper
-    # than presenting a token issued for somewhere else. (A query string
-    # should have been stripped before it got here; missing is the right
-    # answer when it was not.)
+    # than presenting a token issued for somewhere else. (Stripping userinfo,
+    # query and fragment is not normalizing: those are removed before the
+    # lookup, and never sent -- see the next example.)
     it "misses on a different case rather than guessing" do
       instance.token(base_url)
 
@@ -252,11 +252,11 @@ RSpec.describe "EndPointBlank::AccessTokens against the token endpoint" do
       expect(Excon).to have_received(:post).twice
     end
 
-    it "misses on a query string rather than guessing" do
+    it "strips a query string and fragment before the lookup, so the entry for the path serves it" do
       instance.token(base_url)
 
-      expect(instance.token("#{base_url}?page=2")).to eq("tok-2")
-      expect(Excon).to have_received(:post).twice
+      expect(instance.token("#{base_url}?page=2#top")).to eq("tok-1")
+      expect(Excon).to have_received(:post).once
     end
 
     # Falls out of the "key + /" rule rather than from any normalization:
@@ -618,26 +618,28 @@ RSpec.describe "EndPointBlank::AccessTokens against the token endpoint" do
       expect(result).to be(false)
     end
 
-    # Ruby's String#start_with? does not raise on an empty receiver, so an
-    # empty base_url can't reproduce nil's NoMethodError. What it can do is
-    # exact-match a stray entry keyed by "" -- which happens because
-    # `key = payload && payload[:base_url]` treats "" as truthy, so a
-    # response that echoes an empty base_url back gets cached under "" like
-    # any other key. A later call with an empty base_url must not be served
-    # from that entry.
-    it "does not resurrect a token cached under an empty base_url" do
-      instance.token("") # cold cache; the default stub echoes "" back as base_url
+    # An empty or unparseable base_url is refused before any request
+    # (sc-1469): there is no scheme and host to send, and the raw value may
+    # carry a secret. So nothing can be minted, cached, or recorded under it.
+    it "refuses an empty or unparseable base_url without a request, a record, or a log line" do
+      instance.token(base_url)
       expect(Excon).to have_received(:post).once
 
-      instance.token("")
+      ["", "not a url ?token=s3cret", "orders/42", "https://"].each do |bad|
+        result = instance.token_result(bad)
 
-      expect(Excon).to have_received(:post).twice
-    end
+        expect(result).to be_a(EndPointBlank::AccessTokens::Failure)
+        expect(result.outcome).to eq(:request_rejected)
+        expect(result.status).to be_nil
+        expect(result.base_url).to be_nil
+        expect(instance.token(bad)).to be_nil
+        expect(instance.exists?(bad)).to be(false)
+        expect(instance.last_failure(bad)).to be_nil
+      end
 
-    it "does not report an empty base_url as covered by a token cached under an empty base_url" do
-      instance.token("")
-
-      expect(instance.exists?("")).to be(false)
+      expect(Excon).to have_received(:post).once
+      expect(instance.failure_count).to eq(0)
+      expect(logger).not_to have_received(:error)
     end
   end
 

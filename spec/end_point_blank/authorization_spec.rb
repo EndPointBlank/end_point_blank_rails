@@ -82,27 +82,36 @@ RSpec.describe EndPointBlank::Authorization do
     #
     # These lambdas run outside any example, where `double` is not available,
     # so they build a plain response instead.
+    #
+    # The reason in the message is one fixed text per outcome, the same in
+    # every EndPointBlank SDK, and never intake's response body or an
+    # exception message -- so each is pinned exactly.
     fake = Struct.new(:status, :body)
     {
       "the mint times out" => [
-        -> { raise Excon::Error::Timeout, "timed out" }, :transport_error, nil, /no response/
+        -> { raise Excon::Error::Timeout, "timed out" }, :transport_error, nil,
+        "intake could not be reached (timeout, connection refused or retries exhausted); this may be transient"
       ],
       "intake rejects the credential (401)" => [
         -> { fake.new(401, JSON.generate(error: "invalid credentials")) },
-        :credential_rejected, 401, /invalid credentials/
+        :credential_rejected, 401,
+        "intake rejected this application's client credential (HTTP 401); retrying cannot help -- " \
+        "re-issue the credential"
       ],
       "intake refuses the request (422)" => [
         -> { fake.new(422, JSON.generate(error: "no such environment")) },
-        :request_rejected, 422, /no such environment/
+        :request_rejected, 422,
+        "intake refused the token request (HTTP 422); check the URL and that a grant covers the target"
       ],
       "intake fails (500)" => [
-        -> { fake.new(500, "oops") }, :server_error, 500, /HTTP 500/
+        -> { fake.new(500, "oops") }, :server_error, 500,
+        "intake failed to issue a token (HTTP 500); this may be transient"
       ],
       "the response carries a token but no base_url" => [
         lambda {
           fake.new(201, JSON.generate(token: "abc", expired_at: (Time.now + 3600).utc.iso8601))
         },
-        :server_error, 201, /no base_url/
+        :server_error, 201, "intake failed to issue a token (HTTP 201); this may be transient"
       ]
     }.each do |situation, (answer, outcome, status, reason)|
       context "when #{situation}" do
@@ -115,15 +124,16 @@ RSpec.describe EndPointBlank::Authorization do
             expect(error.outcome).to eq(outcome)
             expect(error.status).to eq(status)
             expect(error.failure).to eq(EndPointBlank::AccessTokens.last_failure(base_url))
-            detail = status ? "HTTP #{status}, " : ""
             expect(error.message).to eq(
-              "Could not mint an EndPointBlank access token for #{base_url}: " \
-              "#{outcome}: #{detail}#{error.failure.reason}. " \
+              "Could not mint an EndPointBlank access token for #{base_url}: #{reason}. " \
               "EndPointBlank never sends this service's client_id/client_secret to a provider, " \
               "so there is no Basic-auth fallback and the call must not be made without a token."
             )
-            expect(error.message).to match(reason)
             expect(error.message).not_to include("csecret")
+            # intake's body stays on failure.reason, out of the message.
+            ["invalid credentials", "no such environment", "oops", "no base_url"].each do |body_text|
+              expect(error.message).not_to include(body_text)
+            end
           }
         end
 
@@ -144,18 +154,68 @@ RSpec.describe EndPointBlank::Authorization do
       expect { described_class.header(base_url) }.to raise_error(
         EndPointBlank::TokenUnavailableError,
         "Could not mint an EndPointBlank access token for https://authorization-spec.example.test/orders: " \
-        "credential_rejected: HTTP 401, invalid credentials. EndPointBlank never sends this service's " \
-        "client_id/client_secret to a provider, so there is no Basic-auth fallback and the call must " \
-        "not be made without a token."
+        "intake rejected this application's client credential (HTTP 401); retrying cannot help -- " \
+        "re-issue the credential. EndPointBlank never sends this service's client_id/client_secret to a " \
+        "provider, so there is no Basic-auth fallback and the call must not be made without a token."
       )
     end
 
     it "says so when no reason was recorded" do
       expect(EndPointBlank::TokenUnavailableError.new(base_url).message).to eq(
-        "Could not mint an EndPointBlank access token for #{base_url}: no reason was recorded. " \
-        "EndPointBlank never sends this service's client_id/client_secret to a provider, so there is " \
-        "no Basic-auth fallback and the call must not be made without a token."
+        "Could not mint an EndPointBlank access token for #{base_url}: the token request failed for an " \
+        "unknown reason. EndPointBlank never sends this service's client_id/client_secret to a provider, " \
+        "so there is no Basic-auth fallback and the call must not be made without a token."
       )
+    end
+
+    # sc-1469 review ruling (c): intake refuses a base_url carrying userinfo,
+    # a query or a fragment, so sending them would both leak them and fail
+    # the mint. They are removed before the request, and nothing else about
+    # the call changes.
+    describe "a URL carrying userinfo, a query and a fragment" do
+      let(:raw) { "https://user:hunter2@authorization-spec.example.test/orders?api_key=s3cret#frag" }
+      let(:secrets) { %w[user hunter2 api_key s3cret frag] }
+
+      it "mints, sending intake only the stripped URL" do
+        bodies = []
+        allow(Excon).to receive(:post) do |_url, options|
+          bodies << JSON.parse(options[:body])
+          minted
+        end
+
+        expect(described_class.header(raw)).to eq("Bearer abc")
+        expect(bodies.map { |b| b["base_url"] }).to eq([base_url])
+      end
+
+      it "keeps them off the error, its message and every log line" do
+        record_posts { double("response", status: 401, body: JSON.generate(error: "invalid credentials")) }
+        logged = []
+        allow(logger).to receive(:error) { |line| logged << line }
+        allow(logger).to receive(:info) { |line| logged << line }
+
+        expect { described_class.header(raw) }.to raise_error(EndPointBlank::TokenUnavailableError) { |error|
+          expect(error.base_url).to eq(base_url)
+          expect(error.failure.base_url).to eq(base_url)
+          secrets.each do |secret|
+            expect(error.message).not_to include(secret)
+            logged.each { |line| expect(line).not_to include(secret) }
+          end
+        }
+        expect(logged).not_to be_empty
+        recorded = EndPointBlank::AccessTokens.last_failure(base_url)
+        expect(EndPointBlank::AccessTokens.last_failure(raw)).to equal(recorded)
+      end
+    end
+
+    it "refuses an unparseable URL without any request and without repeating it" do
+      record_posts { raise "no request may be made" }
+
+      ["not a url ?token=s3cret", "orders/42?token=s3cret", "https://?token=s3cret"].each do |bad|
+        expect { described_class.header(bad) }.to raise_error(ArgumentError, /could not parse/) { |error|
+          expect(error.message).not_to include("s3cret")
+        }
+      end
+      expect(calls).to be_empty
     end
 
     # sc-1469 review: `header` used to call `token` and then `last_failure`
@@ -186,7 +246,7 @@ RSpec.describe EndPointBlank::Authorization do
           expect(EndPointBlank::AccessTokens.last_failure(base_url)).to be_nil
           expect(error.outcome).to eq(:credential_rejected)
           expect(error.status).to eq(401)
-          expect(error.message).to include("credential_rejected: HTTP 401, invalid credentials")
+          expect(error.message).to include("intake rejected this application's client credential (HTTP 401)")
         }
       end
 
@@ -204,7 +264,7 @@ RSpec.describe EndPointBlank::Authorization do
           expect(EndPointBlank::AccessTokens.last_failure(base_url).outcome).to eq(:server_error)
           expect(error.outcome).to eq(:credential_rejected)
           expect(error.status).to eq(401)
-          expect(error.message).to include("credential_rejected: HTTP 401, invalid credentials")
+          expect(error.message).to include("intake rejected this application's client credential (HTTP 401)")
         }
       end
 

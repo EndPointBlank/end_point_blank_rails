@@ -13,6 +13,7 @@ require "end_point_blank/commands/generate_access_token"
 RSpec.describe "EndPointBlank::Commands::GenerateAccessToken without ActiveSupport" do
   let(:logger) { double("logger", error: nil, warn: nil, info: nil) }
   let(:configuration) { EndPointBlank::Configuration.instance }
+  let(:target) { "https://host.example.com" }
 
   before do
     allow(EndPointBlank).to receive(:logger).and_return(logger)
@@ -31,7 +32,7 @@ RSpec.describe "EndPointBlank::Commands::GenerateAccessToken without ActiveSuppo
     )
 
     result = nil
-    expect { result = EndPointBlank::Commands::GenerateAccessToken.token("host.example.com") }.not_to raise_error
+    expect { result = EndPointBlank::Commands::GenerateAccessToken.token(target) }.not_to raise_error
 
     expect(result).to eq(token: "abc123", base_url: "host.example.com", expired_at: "2099-01-01T00:00:00Z")
   end
@@ -43,7 +44,7 @@ RSpec.describe "EndPointBlank::Commands::GenerateAccessToken without ActiveSuppo
     )
 
     result = nil
-    expect { result = EndPointBlank::Commands::GenerateAccessToken.token("host.example.com") }.not_to raise_error
+    expect { result = EndPointBlank::Commands::GenerateAccessToken.token(target) }.not_to raise_error
 
     expect(result).to eq(token: "def456", base_url: "host.example.com", expired_at: "2099-01-01T00:00:00Z")
   end
