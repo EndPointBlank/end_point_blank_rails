@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "uri"
+
 module EndPointBlank
   # Reopened with the same superclass in end_point_blank.rb; declared here too
   # so this file can be required on its own.
@@ -43,6 +45,23 @@ module EndPointBlank
 
     private
 
+    # Scheme, host and path only. The caller controls base_url, and its
+    # userinfo, query or fragment can carry a secret; the message is what
+    # reaches logs and error reporting, so they are dropped here. The raw
+    # value stays on #base_url.
+    def describe_url
+      uri = URI.parse(base_url.to_s)
+      return UNPARSEABLE_URL unless uri.scheme && uri.host && !uri.host.empty?
+
+      port = uri.port && uri.port != uri.default_port ? ":#{uri.port}" : ""
+      "#{uri.scheme}://#{uri.host}#{port}#{uri.path}"
+    rescue URI::Error
+      UNPARSEABLE_URL
+    end
+
+    UNPARSEABLE_URL = "the requested URL (not shown: it could not be parsed)"
+    private_constant :UNPARSEABLE_URL
+
     def build_message
       why =
         if failure
@@ -52,7 +71,7 @@ module EndPointBlank
           "no reason was recorded"
         end
 
-      "Could not mint an EndPointBlank access token for #{base_url}: #{why}. " \
+      "Could not mint an EndPointBlank access token for #{describe_url}: #{why}. " \
         "EndPointBlank never sends this service's client_id/client_secret to a provider, " \
         "so there is no Basic-auth fallback and the call must not be made without a token."
     end
