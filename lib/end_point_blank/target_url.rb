@@ -16,19 +16,31 @@ module EndPointBlank
   #
   # Built from the parsed parts, never by splitting the string, so an empty
   # `?` or `#` cannot slip through.
+  #
+  # Only http and https are accepted, because only they can name a provider.
+  # Any other scheme is refused rather than rebuilt: Ruby parses it with a
+  # scheme-specific class whose parts need not fit "scheme://host/path"
+  # (URI::FTP's path has no leading slash, so "ftp://h:21/x" would come out
+  # as "ftp://hx").
   module TargetUrl
+    HTTP_SCHEMES = %w[http https].freeze
+    private_constant :HTTP_SCHEMES
+
     # @param url [String, nil] the URL a caller is about to call
-    # @return [String, nil] "scheme://host[:port]/path" (IPv6 in brackets,
-    #   the port only when it is not the scheme default, the path as given),
-    #   or nil when url cannot be parsed or has no scheme or host -- the
-    #   caller must then refuse it without making any request.
+    # @return [String, nil] "scheme://host[:port]/path" (the scheme
+    #   lowercased, IPv6 in brackets, the port only when it is not the scheme
+    #   default, the path as given), or nil when url cannot be parsed, is not
+    #   http or https, or has no host -- the caller must then refuse it
+    #   without making any request.
     def self.strip(url)
       return nil if url.nil?
 
       uri = URI.parse(url.to_s)
-      return nil if uri.scheme.nil? || uri.host.to_s.empty?
+      # URI lowercases the scheme, so "HTTPS://..." is accepted here too.
+      return nil unless HTTP_SCHEMES.include?(uri.scheme)
+      return nil if uri.host.to_s.empty?
 
-      port = uri.port && uri.port != uri.default_port ? ":#{uri.port}" : ""
+      port = uri.port == uri.default_port ? "" : ":#{uri.port}"
       "#{uri.scheme}://#{uri.host}#{port}#{uri.path}"
     rescue URI::Error
       nil

@@ -42,7 +42,10 @@
   URL that cannot be parsed into a scheme and host is refused without a
   request: `header` raises `ArgumentError` (without repeating the URL), and
   `AccessTokens.token_result` answers a `:request_rejected` `Failure` with no
-  status.
+  status. So is a URL whose scheme is anything but `http` or `https` (matched
+  in any case, and sent lowercased): `ftp://h:21/x` used to come out as
+  `ftp://hx`, because Ruby's `URI::FTP` keeps its path without the leading
+  slash, and no provider is reached over such a scheme anyway.
 
 - **`Commands::GenerateAccessToken.token_result` reports only a request that
   never completed as `:transport_error` (sc-1469).** That means an Excon,

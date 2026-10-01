@@ -245,10 +245,11 @@ RSpec.describe EndPointBlank::Authorization do
       end
     end
 
-    it "refuses an unparseable URL without any request and without repeating it" do
+    it "refuses an unparseable or non-http(s) URL without any request and without repeating it" do
       record_posts { raise "no request may be made" }
 
-      ["not a url ?token=s3cret", "orders/42?token=s3cret", "https://?token=s3cret"].each do |bad|
+      ["not a url ?token=s3cret", "orders/42?token=s3cret", "https://?token=s3cret",
+       "ftp://h:21/x?token=s3cret", "mailto:s3cret@example.test"].each do |bad|
         expect { described_class.header(bad) }.to raise_error(ArgumentError, /could not parse/) { |error|
           expect(error.message).not_to include("s3cret")
         }

@@ -27,10 +27,10 @@ module EndPointBlank
       #   sent to intake, logged, or kept on the error.
       # @return [String] "Bearer <token>"
       # @raise [ArgumentError] when base_url is nil or empty, or cannot be
-      #   parsed into a scheme and host; nothing is sent anywhere. There is
-      #   no no-target form any more: the old `header` with no argument
-      #   returned Basic credentials, and the calls to intake itself now use
-      #   {intake_header}.
+      #   parsed into an http or https URL with a host; nothing is sent
+      #   anywhere. There is no no-target form any more: the old `header`
+      #   with no argument returned Basic credentials, and the calls to
+      #   intake itself now use {intake_header}.
       # @raise [TokenUnavailableError] when no token can be obtained; its
       #   `failure` says why. Anything unexpected raised while minting is
       #   reported the same way, as a :transport_error with that exception
@@ -50,7 +50,7 @@ module EndPointBlank
         if target.nil?
           raise ArgumentError,
                 "EndPointBlank::Authorization.header could not parse the URL it was given " \
-                "(not shown); pass an absolute URL with a scheme and host"
+                "(not shown); pass an absolute http or https URL with a host"
         end
 
         # The reason must come from this call, captured under the cache's
