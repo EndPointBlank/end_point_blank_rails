@@ -129,6 +129,27 @@ RSpec.describe EndPointBlank::AccessTokens do
 
       expect(described_class.token(base_url)).to be_nil
     end
+
+    # Only Authorization.header turns a mint that raised into a
+    # TokenUnavailableError; here it propagates as itself. The mutex must be
+    # free afterwards, or every later mint in the process would hang. Nothing
+    # is recorded for the raise, so last_failure keeps the previous attempt's.
+    it "lets a mint that raised propagate, leaving the mutex free and the previous Failure in place" do
+      allow(EndPointBlank::Commands::GenerateAccessToken).to receive(:token_result)
+        .and_return(rejected(401, "invalid credentials"))
+      previous = described_class.token_result(base_url)
+
+      allow(EndPointBlank::Commands::GenerateAccessToken).to receive(:token_result)
+        .and_raise(NoMethodError.new("broken mint"))
+
+      expect { described_class.token_result(base_url) }.to raise_error(NoMethodError, "broken mint")
+      expect { described_class.token(base_url) }.to raise_error(NoMethodError, "broken mint")
+      expect(instance.instance_variable_get(:@mutex)).not_to be_locked
+      expect(described_class.last_failure(base_url)).to equal(previous)
+
+      cache_token_expiring_in(3600)
+      expect(described_class.token_result(base_url)).to eq("cached-token")
+    end
   end
 end
 # rubocop:enable Metrics/BlockLength

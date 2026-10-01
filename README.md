@@ -247,8 +247,9 @@ misses and mints a new token -- it never guesses.
 
 ### Why a token could not be minted
 
-`EndPointBlank::AccessTokens.token` answers with a token String or `nil`, which is all most
-callers need. When `nil` is not enough — when you want to know whether retrying could possibly
+`EndPointBlank::AccessTokens.token` answers with a token String or `nil` (or raises, as itself,
+anything the mint raised that is not a transport error -- only `Authorization.header` wraps that),
+which is all most callers need. When `nil` is not enough — when you want to know whether retrying could possibly
 help — call `token_result` instead, which answers with the token or the `Failure` for that call:
 
 ```ruby

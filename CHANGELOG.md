@@ -49,7 +49,10 @@
   socket, SSL or timeout error. Anything else raised while minting -- a bug,
   such as a `NoMethodError` -- used to be filed under `:transport_error` too,
   which read as "intake could not be reached" and dropped the exception. It
-  now propagates, and `Authorization.header` reports it as above.
+  now propagates, and so `GenerateAccessToken.token`, `AccessTokens.token`
+  and `AccessTokens.token_result`, which used to answer `nil` or a
+  `:transport_error` `Failure` for it, now raise it; only
+  `Authorization.header` wraps it, and reports it as above.
 
 - **`Authorization.header` with no argument is removed.** `base_url` is now
   required, and `header(nil)` / `header("")` raise `ArgumentError`. The

@@ -183,6 +183,7 @@ module EndPointBlank
         # @param base_url [String] the URL a token is wanted for.
         # @return [Hash, nil] symbol-keyed response body when a token was
         #   minted, otherwise nil.
+        # @raise [StandardError] whatever {token_result} raises, as itself.
         def token(base_url)
           result = token_result(base_url)
 

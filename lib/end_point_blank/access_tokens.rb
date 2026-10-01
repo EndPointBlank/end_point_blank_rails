@@ -129,6 +129,8 @@ module EndPointBlank
     # @return [String, nil] The access token string, or nil if generation
     #   failed -- which includes a response that carried a token but no
     #   base_url.
+    # @raise [StandardError] anything the mint raises that is not a
+    #   transport error, as itself; see {token_result}.
     def token(base_url)
       result = token_result(base_url)
       result.is_a?(Failure) ? nil : result
@@ -148,6 +150,10 @@ module EndPointBlank
     #   could not obtain one. A URL that cannot be parsed answers a
     #   :request_rejected Failure with no status and no base_url, and nothing
     #   is sent to intake or recorded.
+    # @raise [StandardError] anything {Commands::GenerateAccessToken.token_result}
+    #   raises -- a ConfigurationError, or a bug that is not a transport
+    #   error -- as itself; nothing is recorded for it. Only
+    #   {Authorization.header} turns it into a TokenUnavailableError.
     def token_result(base_url)
       base_url = TargetUrl.strip(base_url)
       return unparseable_url_failure if base_url.nil?
