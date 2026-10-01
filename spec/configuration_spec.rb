@@ -399,10 +399,22 @@ RSpec.describe EndPointBlank::Configuration do
         "acima_x7k2mq.r",
         # Nothing outside [a-z0-9-] may reach the derived hostname.
         "acima-x7k2mq\n.r",
+        # Pins \A: with ^ the slug would be "evil\nacima-x7k2mq".
+        "evil\nacima-x7k2mq.r",
         "evil.com@acima-x7k2mq.r",
         "a:1-x7k2mq.r",
         "ACIMA-X7K2MQ.r",
         123
+      ].each do |value|
+        expect(described_class.client_id_slug(value)).to be_nil, "expected nil for #{value.inspect}"
+      end
+    end
+
+    # Elixir answers nil for these; split and match? would raise instead.
+    it "answers nil rather than raising for a client_id it cannot read as text" do
+      [
+        "acima-x7k2mq.r\xff",
+        "acima-x7k2mq.r".encode("UTF-16LE")
       ].each do |value|
         expect(described_class.client_id_slug(value)).to be_nil, "expected nil for #{value.inspect}"
       end

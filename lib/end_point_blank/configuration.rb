@@ -104,6 +104,10 @@ module EndPointBlank
     # @return [String, nil]
     def self.client_id_slug(client_id)
       return nil unless client_id.is_a?(String)
+      # Total, like Elixir's: split and match? raise on invalid bytes or on an
+      # encoding that is not ASCII-compatible (UTF-16), and neither can be a
+      # credential that authenticates.
+      return nil unless client_id.valid_encoding? && client_id.encoding.ascii_compatible?
 
       slug, random = client_id.split(".", 2)
       return nil if random.nil? || random.empty?
