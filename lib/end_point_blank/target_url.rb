@@ -24,26 +24,34 @@ module EndPointBlank
   # as "ftp://hx").
   module TargetUrl
     HTTP_SCHEMES = %w[http https].freeze
-    private_constant :HTTP_SCHEMES
+    # intake's BaseUrl refuses any other port, so asking would only cost a
+    # request and a recorded failure.
+    VALID_PORTS = (1..65_535).freeze
+    private_constant :HTTP_SCHEMES, :VALID_PORTS
 
     # @param url [String, nil] the URL a caller is about to call
-    # @return [String, nil] "scheme://host[:port]/path" (the scheme
-    #   lowercased, IPv6 in brackets, the port only when it is not the scheme
-    #   default, the path as given), or nil when url cannot be parsed, is not
-    #   http or https, or has no host -- the caller must then refuse it
-    #   without making any request.
+    # @return [String, nil] "scheme://host[:port]/path" (scheme and host
+    #   lowercased as intake's BaseUrl does, IPv6 in brackets, the port only
+    #   when it is not the scheme default, the path as given), or nil when url
+    #   cannot be parsed, is not http or https, has no host, or has a port
+    #   outside 1..65535 -- the caller must then refuse it without making any
+    #   request.
     def self.strip(url)
       return nil if url.nil?
 
       uri = URI.parse(url.to_s)
-      # URI lowercases the scheme, so "HTTPS://..." is accepted here too.
-      return nil unless HTTP_SCHEMES.include?(uri.scheme)
-      return nil if uri.host.to_s.empty?
+      return nil unless acceptable?(uri)
 
       port = uri.port == uri.default_port ? "" : ":#{uri.port}"
-      "#{uri.scheme}://#{uri.host}#{port}#{uri.path}"
+      "#{uri.scheme}://#{uri.host.downcase}#{port}#{uri.path}"
     rescue URI::Error
       nil
     end
+
+    # URI lowercases the scheme, so "HTTPS://..." is accepted here too.
+    def self.acceptable?(uri)
+      HTTP_SCHEMES.include?(uri.scheme) && !uri.host.to_s.empty? && VALID_PORTS.cover?(uri.port)
+    end
+    private_class_method :acceptable?
   end
 end

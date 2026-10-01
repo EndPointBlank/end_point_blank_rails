@@ -17,11 +17,14 @@ module EndPointBlank
   # Every public entry point strips the caller's URL to scheme, host, port
   # and path first ({TargetUrl.strip}), so userinfo, a query or a fragment
   # never reaches intake, a cache or failure key, or a log line. A URL that
-  # cannot be parsed is refused without a request (sc-1469).
+  # cannot be parsed into an http or https URL with a host is refused
+  # without a request (sc-1469).
   #
   # Lookup is a plain exact-or-path-prefix comparison, with the longest match
-  # winning. The SDK deliberately does not normalize: intake owns that rule,
-  # and a miss costs one extra request rather than a wrong answer.
+  # winning. Beyond {TargetUrl.strip} (which also lowercases the scheme and
+  # host, as intake does) the SDK deliberately does not normalize: intake
+  # owns that rule, and a miss costs one extra request rather than a wrong
+  # answer.
   #
   # A lookup has to scan the keys, and the fast path deliberately does not
   # take the mutex, so every write **replaces** the entries Hash instead of
@@ -123,9 +126,9 @@ module EndPointBlank
     # {token_result} hands back the reason captured under the mutex instead.
     #
     # @param base_url [String] the URL you are about to call. Its userinfo,
-    #   query and fragment are removed ({TargetUrl.strip}); the rest is sent
-    #   as-is, and intake normalizes it and matches it against registered
-    #   base URLs by longest path prefix.
+    #   query and fragment are removed and its scheme and host lowercased
+    #   ({TargetUrl.strip}); the rest is sent as-is, and intake normalizes it
+    #   and matches it against registered base URLs by longest path prefix.
     # @return [String, nil] The access token string, or nil if generation
     #   failed -- which includes a response that carried a token but no
     #   base_url.
@@ -147,9 +150,9 @@ module EndPointBlank
     #
     # @param base_url [String] the URL you are about to call; see {token}.
     # @return [String, Failure] the access token string, or why this call
-    #   could not obtain one. A URL that cannot be parsed answers a
-    #   :request_rejected Failure with no status and no base_url, and nothing
-    #   is sent to intake or recorded.
+    #   could not obtain one. A URL that cannot be parsed into an http or
+    #   https URL with a host answers a :request_rejected Failure with no
+    #   status and no base_url, and nothing is sent to intake or recorded.
     # @raise [StandardError] anything {Commands::GenerateAccessToken.token_result}
     #   raises -- a ConfigurationError, or a bug that is not a transport
     #   error -- as itself; nothing is recorded for it. Only
@@ -306,7 +309,7 @@ module EndPointBlank
     # stale-entry cleanup on a successful one.
     #
     # Deliberately not a port of intake's matcher: no normalization on either
-    # side. A caller that passes a non-canonical URL simply misses and mints
+    # side beyond {TargetUrl.strip}. A caller that passes a non-canonical URL simply misses and mints
     # again, which costs one HTTP call and is never a wrong answer.
     #
     # Takes entries as an explicit argument, rather than reading @entries

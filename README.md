@@ -241,9 +241,9 @@ longest path prefix, so you need not know how the target registered itself -- `h
 `https://api.example.com/orders/42` reuses a token already cached for
 `https://api.example.com/orders`. `EndPointBlank::AccessTokens` caches one token per base URL
 intake resolves to, not one per process, so a service that calls several targets holds a token
-for each. The lookup uses the URL with its userinfo, query and fragment removed; beyond that, a URL
-that does not match character-for-character (a different case, an unregistered path) simply
-misses and mints a new token -- it never guesses.
+for each. The lookup uses the URL with its userinfo, query and fragment removed and its scheme and
+host lowercased, as intake does; beyond that, a URL that does not match character-for-character
+(a different path case, an unregistered path) simply misses and mints a new token -- it never guesses.
 
 ### Why a token could not be minted
 

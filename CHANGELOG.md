@@ -45,7 +45,11 @@
   status. So is a URL whose scheme is anything but `http` or `https` (matched
   in any case, and sent lowercased): `ftp://h:21/x` used to come out as
   `ftp://hx`, because Ruby's `URI::FTP` keeps its path without the leading
-  slash, and no provider is reached over such a scheme anyway.
+  slash, and no provider is reached over such a scheme anyway. So, too, is a
+  URL whose port is outside 1..65535, which intake refuses: it used to cost a
+  request and a recorded failure. The host is lowercased, as intake's
+  `BaseUrl` does, so `API.example.test` and `api.example.test` now share one
+  cached token and one failure record instead of minting separately.
 
 - **`Commands::GenerateAccessToken.token_result` reports only a request that
   never completed as `:transport_error` (sc-1469).** That means an Excon,
