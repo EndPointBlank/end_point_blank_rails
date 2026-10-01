@@ -261,16 +261,25 @@ RSpec.describe "EndPointBlank::AccessTokens against the token endpoint" do
       expect(Excon).to have_received(:post).twice
     end
 
-    # The SDK does not normalize -- intake owns that rule. A URL that does not
-    # match character-for-character costs one extra request, which is cheaper
-    # than presenting a token issued for somewhere else. (Stripping userinfo,
-    # query and fragment is not normalizing: those are removed before the
-    # lookup, and never sent -- see the next example.)
-    it "misses on a different case rather than guessing" do
+    # Beyond TargetUrl.strip the SDK does not normalize -- intake owns that
+    # rule. A URL that does not match character-for-character costs one extra
+    # request, which is cheaper than presenting a token issued for somewhere
+    # else. (Stripping userinfo, query and fragment is not normalizing: those
+    # are removed before the lookup, and never sent -- see the next example.)
+    it "misses on a different path case rather than guessing" do
       instance.token(base_url)
 
-      expect(instance.token(base_url.sub("tokens", "Tokens"))).to eq("tok-2")
+      expect(instance.token(base_url.sub("orders", "Orders"))).to eq("tok-2")
       expect(Excon).to have_received(:post).twice
+    end
+
+    # intake lowercases the host itself, so two spellings of one host are one
+    # target; TargetUrl.strip lowercases it too, so they share one entry.
+    it "serves a different host case from the same entry" do
+      instance.token(base_url)
+
+      expect(instance.token(base_url.sub("tokens", "Tokens"))).to eq("tok-1")
+      expect(Excon).to have_received(:post).once
     end
 
     it "strips a query string and fragment before the lookup, so the entry for the path serves it" do
@@ -475,17 +484,16 @@ RSpec.describe "EndPointBlank::AccessTokens against the token endpoint" do
     )
   end
 
-  # base_url goes on the wire verbatim -- no downcasing, port-stripping, or
-  # trailing-slash trimming. intake owns normalization; the SDK does not add a
-  # URI parser.
-  it "sends the base URL verbatim, with no normalization" do
-    literal = "https://API.Example.test:8443/Orders/"
-
-    instance.token(literal)
+  # Apart from TargetUrl.strip -- userinfo, query and fragment removed, scheme
+  # and host lowercased as intake does -- base_url goes on the wire verbatim:
+  # no path case-folding, port-stripping, or trailing-slash trimming. intake
+  # owns normalization.
+  it "sends the base URL with only its host lowercased" do
+    instance.token("https://API.Example.test:8443/Orders/")
 
     expect(Excon).to have_received(:post).with(
       configuration.access_token_url,
-      hash_including(body: JSON.generate(base_url: literal))
+      hash_including(body: JSON.generate(base_url: "https://api.example.test:8443/Orders/"))
     )
   end
 

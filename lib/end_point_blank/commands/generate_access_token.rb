@@ -120,7 +120,8 @@ module EndPointBlank
         # @param base_url [String] the URL a token is wanted for. Its
         #   userinfo, query and fragment are never sent ({TargetUrl.strip}).
         # @return [AccessTokenResult] never nil. A URL that cannot be parsed
-        #   is :request_rejected with no status, and nothing is sent.
+        #   into an http or https URL with a host is :request_rejected with no
+        #   status, and nothing is sent.
         # @raise [ConfigurationError] when client_id or client_secret is
         #   missing; nothing is sent.
         # @raise [StandardError] anything raised while minting that is not
@@ -130,7 +131,8 @@ module EndPointBlank
           # its own and must not put a raw URL in the request body either.
           target = TargetUrl.strip(base_url)
           if target.nil?
-            EndPointBlank.logger.error "Access token not requested: the URL could not be parsed (not shown)"
+            EndPointBlank.logger.error "Access token not requested: the URL could not be parsed " \
+                                       "into an http or https URL with a host (not shown)"
             return AccessTokenResult.new(outcome: :request_rejected, status: nil, payload: nil)
           end
 

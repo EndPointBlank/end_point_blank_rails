@@ -197,7 +197,7 @@ end
 
 `base_url` is required. Until this release `header` with no argument returned `Basic` credentials; that
 form is gone, and `header(nil)` or `header("")` raises `ArgumentError`, as does a URL that cannot be
-parsed into a scheme and host (nothing is sent, and the message does not repeat the URL). The SDK's own calls to its
+parsed into an http or https URL with a host (nothing is sent, and the message does not repeat the URL). The SDK's own calls to its
 own intake (authorize, token minting, endpoint updates, the log/request/response writers) still
 authenticate with `Basic`, which is safe because intake already holds this service's credential;
 they use the internal `EndPointBlank::Authorization.intake_header`, which is not for outbound
@@ -241,9 +241,9 @@ longest path prefix, so you need not know how the target registered itself -- `h
 `https://api.example.com/orders/42` reuses a token already cached for
 `https://api.example.com/orders`. `EndPointBlank::AccessTokens` caches one token per base URL
 intake resolves to, not one per process, so a service that calls several targets holds a token
-for each. The lookup uses the URL with its userinfo, query and fragment removed; beyond that, a URL
-that does not match character-for-character (a different case, an unregistered path) simply
-misses and mints a new token -- it never guesses.
+for each. The lookup uses the URL with its userinfo, query and fragment removed and its scheme and
+host lowercased, as intake does; beyond that, a URL that does not match character-for-character
+(a different path case, an unregistered path) simply misses and mints a new token -- it never guesses.
 
 ### Why a token could not be minted
 
@@ -284,7 +284,7 @@ status, or `nil` when no usable one was obtained), `reason`, and `at`, and answe
 
 `token`, `token_result`, `exists?` and `last_failure` all remove the URL's userinfo, query and
 fragment first, so the cache, the failure record (and its `base_url`) and the log lines only ever
-hold the stripped URL. A URL that cannot be parsed into a scheme and host is never sent:
+hold the stripped URL. A URL that cannot be parsed into an http or https URL with a host is never sent:
 `token_result` answers a `:request_rejected` `Failure` with no `status` and no `base_url`, and
 nothing is recorded.
 
