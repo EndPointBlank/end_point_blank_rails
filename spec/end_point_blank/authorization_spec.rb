@@ -2,6 +2,7 @@
 
 require "spec_helper"
 
+# rubocop:disable Metrics/BlockLength
 RSpec.describe EndPointBlank::Authorization do
   let(:configuration) { EndPointBlank::Configuration.instance }
   let(:logger) { double("logger", info: nil, error: nil, warn: nil) }
@@ -445,7 +446,9 @@ RSpec.describe EndPointBlank::Commands::BearerGenerate do
     around do |example|
       deprecated = Warning[:deprecated]
       Warning[:deprecated] = true
-      described_class.remove_instance_variable(:@deprecation_warned) if described_class.instance_variable_defined?(:@deprecation_warned)
+      if described_class.instance_variable_defined?(:@deprecation_warned)
+        described_class.remove_instance_variable(:@deprecation_warned)
+      end
       example.run
     ensure
       Warning[:deprecated] = deprecated
@@ -474,3 +477,4 @@ RSpec.describe EndPointBlank::Commands::BearerGenerate do
     end
   end
 end
+# rubocop:enable Metrics/BlockLength

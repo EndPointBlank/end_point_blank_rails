@@ -6,7 +6,7 @@ module EndPointBlank
       "EndPointBlank::Commands::BearerGenerate is deprecated and will be removed: its header " \
       "carries this service's own client_id/client_secret and is only valid for this service's " \
       "own EndPointBlank intake. Never send it to a provider; use " \
-      "EndPointBlank::Authorization.header(base_url) for outbound calls (sc-1469)."
+      "EndPointBlank::Authorization.header(base_url) for outbound calls (sc-1469).".freeze
     BEARER_GENERATE_DEPRECATION_MUTEX = Mutex.new
     private_constant :BEARER_GENERATE_DEPRECATION_MUTEX
 

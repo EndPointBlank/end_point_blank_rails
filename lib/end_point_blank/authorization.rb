@@ -1,9 +1,9 @@
 #!/bin/ruby
 
 require 'base64'
-require_relative 'token_unavailable_error'
-require_relative 'configuration_error'
-require_relative 'target_url'
+require_relative "token_unavailable_error"
+require_relative "configuration_error"
+require_relative "target_url"
 
 module EndPointBlank
   module AuthorizationMethods
@@ -37,7 +37,7 @@ module EndPointBlank
       #   as `cause`.
       # @raise [ConfigurationError] when client_id or client_secret is
       #   missing; nothing is sent.
-      def header(base_url)
+      def header(base_url) # rubocop:disable Metrics/AbcSize, Metrics/MethodLength
         if base_url.nil? || base_url.to_s.empty?
           raise ArgumentError,
                 "EndPointBlank::Authorization.header needs the URL you are about to call; " \
@@ -96,7 +96,7 @@ module EndPointBlank
       # @return [String] "Basic <credentials>"
       # @raise [ConfigurationError] when client_id or client_secret is nil or
       #   empty. Interpolating them would silently send `Basic Og==` instead.
-      def intake_header
+      def intake_header # rubocop:disable Metrics/AbcSize, Metrics/MethodLength
         client_id = configuration.client_id
         client_secret = configuration.client_secret
         missing = []

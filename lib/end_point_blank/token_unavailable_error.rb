@@ -71,7 +71,7 @@ module EndPointBlank
     # intake's response body (Failure#reason) or an exception message: the
     # message is what reaches logs and error reporting, and neither is ours
     # to vouch for. Failure#reason stays available on #failure.
-    def reason
+    def reason # rubocop:disable Metrics/MethodLength
       # Before the outcome, because a mint that raised is also :transport_error.
       return "the token request failed unexpectedly" if unexpected?
 

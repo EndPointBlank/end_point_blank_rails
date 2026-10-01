@@ -6,8 +6,8 @@ require "openssl"
 require "socket"
 require "timeout"
 require_relative 'http'
-require_relative '../configuration_error'
-require_relative '../target_url'
+require_relative "../configuration_error"
+require_relative "../target_url"
 
 module EndPointBlank
   module Commands
@@ -125,7 +125,7 @@ module EndPointBlank
         #   missing; nothing is sent.
         # @raise [StandardError] anything raised while minting that is not
         #   one of {TRANSPORT_ERRORS}; see the rescue below.
-        def token_result(base_url)
+        def token_result(base_url) # rubocop:disable Metrics/AbcSize, Metrics/MethodLength
           # Defensive: AccessTokens already strips, but this is callable on
           # its own and must not put a raw URL in the request body either.
           target = TargetUrl.strip(base_url)

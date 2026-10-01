@@ -26,7 +26,7 @@ module EndPointBlank
       return nil if url.nil?
 
       uri = URI.parse(url.to_s)
-      return nil if uri.scheme.nil? || uri.host.nil? || uri.host.empty?
+      return nil if uri.scheme.nil? || uri.host.to_s.empty?
 
       port = uri.port && uri.port != uri.default_port ? ":#{uri.port}" : ""
       "#{uri.scheme}://#{uri.host}#{port}#{uri.path}"
