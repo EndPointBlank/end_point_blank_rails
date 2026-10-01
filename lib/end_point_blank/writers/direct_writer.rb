@@ -10,7 +10,7 @@ module EndPointBlank
       end
 
       def write(list)
-        auth = EndPointBlank::Authorization.header
+        auth = EndPointBlank::Authorization.intake_header
         EndPointBlank::Commands::Http.post(@url, auth, { payload: list })
       end
     end

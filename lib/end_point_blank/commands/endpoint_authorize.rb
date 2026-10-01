@@ -65,7 +65,7 @@ module EndPointBlank
           # token, so the 401 retry that used to live here is gone: a 401 now
           # means the credential is wrong, which is worth surfacing rather
           # than retrying.
-          response = Http.post(configuration.authorize_url, Authorization.header, body)
+          response = Http.post(configuration.authorize_url, Authorization.intake_header, body)
 
           return nil if response.nil?
           EndPointBlank.logger.info "Authentication response: #{response.status} - #{response.body}"

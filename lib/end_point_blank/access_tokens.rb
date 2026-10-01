@@ -2,6 +2,7 @@
 
 require 'singleton'
 require "time"
+require_relative "target_url"
 
 module EndPointBlank
   # Thread-safe singleton holding this process's access tokens, one per
@@ -12,6 +13,11 @@ module EndPointBlank
   # URL it is about to call; intake answers with the base URL of the
   # environment that URL belongs to, and subsequent calls anywhere under that
   # base URL reuse the entry.
+  #
+  # Every public entry point strips the caller's URL to scheme, host, port
+  # and path first ({TargetUrl.strip}), so userinfo, a query or a fragment
+  # never reaches intake, a cache or failure key, or a log line. A URL that
+  # cannot be parsed is refused without a request (sc-1469).
   #
   # Lookup is a plain exact-or-path-prefix comparison, with the longest match
   # winning. The SDK deliberately does not normalize: intake owns that rule,
@@ -103,15 +109,55 @@ module EndPointBlank
       instance.last_failure(base_url)
     end
 
+    def self.token_result(base_url)
+      instance.token_result(base_url)
+    end
+
     # Retrieve a token covering base_url, generating one if no usable entry
     # covers it.
-    # @param base_url [String] the URL you are about to call, with any query
-    #   string and fragment removed. It is sent verbatim; intake normalizes it
-    #   and matches it against registered base URLs by longest path prefix.
+    #
+    # When this answers nil and the caller wants to know why, it must not ask
+    # {last_failure} afterwards if it needs the reason for THIS call: the
+    # mutex is already released by then, so another thread's successful mint
+    # may have cleared the record, or its own failed mint overwritten it.
+    # {token_result} hands back the reason captured under the mutex instead.
+    #
+    # @param base_url [String] the URL you are about to call. Its userinfo,
+    #   query and fragment are removed ({TargetUrl.strip}); the rest is sent
+    #   as-is, and intake normalizes it and matches it against registered
+    #   base URLs by longest path prefix.
     # @return [String, nil] The access token string, or nil if generation
     #   failed -- which includes a response that carried a token but no
     #   base_url.
+    # @raise [StandardError] anything the mint raises that is not a
+    #   transport error, as itself; see {token_result}.
     def token(base_url)
+      result = token_result(base_url)
+      result.is_a?(Failure) ? nil : result
+    end
+
+    # {token}, but answering the {Failure} for this call instead of nil.
+    #
+    # The Failure is the one recorded inside the mutex by this call's own
+    # mint, so it describes this call and nothing else. {last_failure} is a
+    # shared, per-URL slot read after the lock is gone; between the two,
+    # another thread can clear it (a successful mint for the same URL) or
+    # replace it (its own failed mint), and a caller building an error from
+    # it would report someone else's reason, or none (sc-1469).
+    #
+    # @param base_url [String] the URL you are about to call; see {token}.
+    # @return [String, Failure] the access token string, or why this call
+    #   could not obtain one. A URL that cannot be parsed answers a
+    #   :request_rejected Failure with no status and no base_url, and nothing
+    #   is sent to intake or recorded.
+    # @raise [StandardError] anything {Commands::GenerateAccessToken.token_result}
+    #   raises -- a ConfigurationError, or a bug that is not a transport
+    #   error -- as itself; nothing is recorded for it. Only
+    #   {Authorization.header} turns it into a TokenUnavailableError.
+    def token_result(base_url)
+      base_url = TargetUrl.strip(base_url)
+      return unparseable_url_failure if base_url.nil?
+
       entry = match(base_url)
       return entry[:token] if usable?(entry)
 
@@ -168,7 +214,6 @@ module EndPointBlank
           @entries = @entries.reject { |k, _| k == stale }.freeze if stale
 
           record_failure(base_url, result)
-          nil
         end
       end
     end
@@ -181,9 +226,9 @@ module EndPointBlank
     # one that wants to know whether to give up or try again asks here.
     #
     # Scope: one record per base URL, keyed on the URL as it was passed to
-    # `token` rather than on whatever intake resolved it to -- a failed mint
-    # often has no resolved base URL to speak of, and the caller has only the
-    # URL it asked with. The map is bounded; see MAX_FAILURES.
+    # `token` (stripped) rather than on whatever intake resolved it to -- a
+    # failed mint often has no resolved base URL to speak of, and the caller
+    # has only the URL it asked with. The map is bounded; see MAX_FAILURES.
     #
     # Reads @failures exactly the way `match` reads @entries: one atomic read
     # of the ivar, no mutex, and every write inside the mutex REPLACES the
@@ -192,9 +237,13 @@ module EndPointBlank
     # a half-built map. Being a frozen Data, the Failure handed back needs no
     # defensive copy.
     #
-    # @param base_url [String] the URL that was asked about
+    # @param base_url [String] the URL that was asked about; stripped the
+    #   same way {token_result} strips it before keying the record.
     # @return [Failure, nil]
     def last_failure(base_url)
+      base_url = TargetUrl.strip(base_url)
+      return nil if base_url.nil?
+
       @failures[base_url]
     end
 
@@ -240,7 +289,7 @@ module EndPointBlank
     # @param base_url [String] the URL to check coverage for
     # @return [Boolean]
     def exists?(base_url)
-      entry = match(base_url)
+      entry = match(TargetUrl.strip(base_url))
       !entry.nil? && entry[:expired_at] > Time.now + PRESENCE_WINDOW
     end
 
@@ -286,7 +335,16 @@ module EndPointBlank
       !entry.nil? && entry[:expired_at] > Time.now + REFRESH_WINDOW
     end
 
-    # Log the failure and remember it. Runs inside the mutex.
+    # What {token_result} answers for a URL {TargetUrl.strip} refused. Not
+    # logged and not recorded: there is no stripped URL to key or name it
+    # by, and the raw one may carry a secret.
+    def unparseable_url_failure
+      Failure.new(base_url: nil, outcome: :request_rejected, status: nil,
+                  reason: "the URL could not be parsed, so no token was requested", at: Time.now)
+    end
+
+    # Log the failure and remember it, and return the Failure recorded.
+    # Runs inside the mutex.
     #
     # The 401 gets its own line, and it is loud: it is the one failure that
     # will not clear on its own, and the one whose remedy is a human action.
@@ -312,10 +370,10 @@ module EndPointBlank
       # can see yet, so mutating it here is safe; only the finished, frozen
       # Hash is published to @failures.
       failures.shift while failures.size >= MAX_FAILURES
-      @failures = failures.merge(
-        base_url => Failure.new(base_url: base_url, outcome: result.outcome, status: result.status,
-                                reason: reason, at: Time.now)
-      ).freeze
+      failure = Failure.new(base_url: base_url, outcome: result.outcome, status: result.status,
+                            reason: reason, at: Time.now)
+      @failures = failures.merge(base_url => failure).freeze
+      failure
     end
 
     # A success wipes the record, so `last_failure` never reports a problem

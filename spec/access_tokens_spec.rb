@@ -66,6 +66,91 @@ RSpec.describe EndPointBlank::AccessTokens do
     expect(second).to eq("fresh-token")
     expect(EndPointBlank::Commands::GenerateAccessToken).to have_received(:token_result).once
   end
+
+  # sc-1469: `token` then `last_failure` reads a shared slot after the mutex
+  # is released, so another thread can clear or overwrite it in between.
+  # token_result hands back the Failure recorded inside the lock instead.
+  describe ".token_result" do
+    let(:logger) { double("logger", info: nil, error: nil, warn: nil) }
+
+    before { allow(EndPointBlank).to receive(:logger).and_return(logger) }
+
+    def rejected(status, error)
+      outcome = status == 401 ? :credential_rejected : :server_error
+      EndPointBlank::Commands::AccessTokenResult.new(outcome: outcome, status: status, payload: { error: error })
+    end
+
+    it "answers the token String when one is minted or cached" do
+      cache_token_expiring_in(3600)
+
+      expect(described_class.token_result(base_url)).to eq("cached-token")
+      expect(described_class.token(base_url)).to eq("cached-token")
+    end
+
+    it "answers this call's Failure when no token can be minted" do
+      allow(EndPointBlank::Commands::GenerateAccessToken).to receive(:token_result)
+        .and_return(rejected(401, "invalid credentials"))
+
+      result = described_class.token_result(base_url)
+
+      expect(result).to be_a(EndPointBlank::AccessTokens::Failure)
+      expect(result).to have_attributes(base_url: base_url, outcome: :credential_rejected, status: 401,
+                                        reason: "invalid credentials")
+      # The shared slot is still written, for callers of last_failure.
+      expect(described_class.last_failure(base_url)).to equal(result)
+    end
+
+    it "keeps its own Failure when another thread clears the shared record straight after" do
+      allow(EndPointBlank::Commands::GenerateAccessToken).to receive(:token_result)
+        .and_return(rejected(401, "invalid credentials"))
+
+      result = described_class.token_result(base_url)
+      instance.clear # e.g. another thread's successful mint for the same URL
+
+      expect(described_class.last_failure(base_url)).to be_nil
+      expect(result.outcome).to eq(:credential_rejected)
+    end
+
+    it "keeps its own Failure when another thread overwrites the shared record straight after" do
+      allow(EndPointBlank::Commands::GenerateAccessToken).to receive(:token_result)
+        .and_return(rejected(401, "invalid credentials"), rejected(500, "boom"))
+
+      mine = described_class.token_result(base_url)
+      theirs = described_class.token_result(base_url)
+
+      expect(described_class.last_failure(base_url)).to equal(theirs)
+      expect(mine).to have_attributes(outcome: :credential_rejected, status: 401)
+      expect(theirs).to have_attributes(outcome: :server_error, status: 500)
+    end
+
+    it "leaves token answering nil on failure, as before" do
+      allow(EndPointBlank::Commands::GenerateAccessToken).to receive(:token_result)
+        .and_return(rejected(401, "invalid credentials"))
+
+      expect(described_class.token(base_url)).to be_nil
+    end
+
+    # Only Authorization.header turns a mint that raised into a
+    # TokenUnavailableError; here it propagates as itself. The mutex must be
+    # free afterwards, or every later mint in the process would hang. Nothing
+    # is recorded for the raise, so last_failure keeps the previous attempt's.
+    it "lets a mint that raised propagate, leaving the mutex free and the previous Failure in place" do
+      allow(EndPointBlank::Commands::GenerateAccessToken).to receive(:token_result)
+        .and_return(rejected(401, "invalid credentials"))
+      previous = described_class.token_result(base_url)
+
+      allow(EndPointBlank::Commands::GenerateAccessToken).to receive(:token_result)
+        .and_raise(NoMethodError.new("broken mint"))
+
+      expect { described_class.token_result(base_url) }.to raise_error(NoMethodError, "broken mint")
+      expect { described_class.token(base_url) }.to raise_error(NoMethodError, "broken mint")
+      expect(instance.instance_variable_get(:@mutex)).not_to be_locked
+      expect(described_class.last_failure(base_url)).to equal(previous)
+
+      cache_token_expiring_in(3600)
+      expect(described_class.token_result(base_url)).to eq("cached-token")
+    end
+  end
 end
 # rubocop:enable Metrics/BlockLength
 
@@ -178,9 +263,9 @@ RSpec.describe "EndPointBlank::AccessTokens against the token endpoint" do
 
     # The SDK does not normalize -- intake owns that rule. A URL that does not
     # match character-for-character costs one extra request, which is cheaper
-    # than presenting a token issued for somewhere else. (A query string
-    # should have been stripped before it got here; missing is the right
-    # answer when it was not.)
+    # than presenting a token issued for somewhere else. (Stripping userinfo,
+    # query and fragment is not normalizing: those are removed before the
+    # lookup, and never sent -- see the next example.)
     it "misses on a different case rather than guessing" do
       instance.token(base_url)
 
@@ -188,11 +273,11 @@ RSpec.describe "EndPointBlank::AccessTokens against the token endpoint" do
       expect(Excon).to have_received(:post).twice
     end
 
-    it "misses on a query string rather than guessing" do
+    it "strips a query string and fragment before the lookup, so the entry for the path serves it" do
       instance.token(base_url)
 
-      expect(instance.token("#{base_url}?page=2")).to eq("tok-2")
-      expect(Excon).to have_received(:post).twice
+      expect(instance.token("#{base_url}?page=2#top")).to eq("tok-1")
+      expect(Excon).to have_received(:post).once
     end
 
     # Falls out of the "key + /" rule rather than from any normalization:
@@ -554,26 +639,28 @@ RSpec.describe "EndPointBlank::AccessTokens against the token endpoint" do
       expect(result).to be(false)
     end
 
-    # Ruby's String#start_with? does not raise on an empty receiver, so an
-    # empty base_url can't reproduce nil's NoMethodError. What it can do is
-    # exact-match a stray entry keyed by "" -- which happens because
-    # `key = payload && payload[:base_url]` treats "" as truthy, so a
-    # response that echoes an empty base_url back gets cached under "" like
-    # any other key. A later call with an empty base_url must not be served
-    # from that entry.
-    it "does not resurrect a token cached under an empty base_url" do
-      instance.token("") # cold cache; the default stub echoes "" back as base_url
+    # An empty or unparseable base_url is refused before any request
+    # (sc-1469): there is no scheme and host to send, and the raw value may
+    # carry a secret. So nothing can be minted, cached, or recorded under it.
+    it "refuses an empty or unparseable base_url without a request, a record, or a log line" do
+      instance.token(base_url)
       expect(Excon).to have_received(:post).once
 
-      instance.token("")
+      ["", "not a url ?token=s3cret", "orders/42", "https://"].each do |bad|
+        result = instance.token_result(bad)
 
-      expect(Excon).to have_received(:post).twice
-    end
+        expect(result).to be_a(EndPointBlank::AccessTokens::Failure)
+        expect(result.outcome).to eq(:request_rejected)
+        expect(result.status).to be_nil
+        expect(result.base_url).to be_nil
+        expect(instance.token(bad)).to be_nil
+        expect(instance.exists?(bad)).to be(false)
+        expect(instance.last_failure(bad)).to be_nil
+      end
 
-    it "does not report an empty base_url as covered by a token cached under an empty base_url" do
-      instance.token("")
-
-      expect(instance.exists?("")).to be(false)
+      expect(Excon).to have_received(:post).once
+      expect(instance.failure_count).to eq(0)
+      expect(logger).not_to have_received(:error)
     end
   end
 

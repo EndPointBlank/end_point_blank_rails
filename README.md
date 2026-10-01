@@ -8,8 +8,8 @@ auto-loads (railtie + middleware) when Rails is present.
 ## Capabilities
 
 - **Endpoint tracking** — every request/response passing through the Rack middleware is reported.
-- **Authorization** — outbound calls to other EndPointBlank-protected services are signed
-  (`Basic` client-credential or cached `Bearer` token), and inbound requests can be authorized
+- **Authorization** — outbound calls to other EndPointBlank-protected services carry a
+  `Bearer` access token (never this service's own client credentials), and inbound requests can be authorized
   against the EndPointBlank service before your action runs.
 - **Error, request, response, and log reporting** — background, queued, non-blocking delivery to
   the EndPointBlank intake API.
@@ -90,7 +90,7 @@ still reaches the live value, the same as mutating it through `EndPointBlank.log
 
 | `configure` setting | Env var fallback | Default | Notes |
 |---|---|---|---|
-| `client_id` | `ENDPOINTBLANK_CLIENT_ID` | `nil` | Used to build the `Basic` authorization header. |
+| `client_id` | `ENDPOINTBLANK_CLIENT_ID` | `nil` | Authenticates this service to its own intake (`Basic`). Never sent to a provider. |
 | `client_secret` | `ENDPOINTBLANK_CLIENT_SECRET` | `nil` | Paired with `client_id`. |
 | `base_url` | `ENDPOINTBLANK_BASE_URL` | `https://in.endpointblank.com` | Base for access-token, authorize, and endpoint-update APIs. |
 | `log_base_url` | `ENDPOINTBLANK_LOG_BASE_URL` | `https://log.endpointblank.com` | Base for error/request/response/log reporting APIs. |
@@ -171,39 +171,93 @@ export ENDPOINTBLANK_ENV=staging
 
 ### Authorization
 
-`EndPointBlank::Authorization.header(base_url = nil)` builds the outbound `Authorization` header
-used by the gem's own HTTP calls: a cached `Bearer` token covering `base_url` when one is
-available (via `EndPointBlank::AccessTokens`), otherwise `Basic` credentials built from
-`client_id` / `client_secret` -- which covers both giving no target and a token that could not
-be obtained.
+`EndPointBlank::Authorization.header(base_url)` builds the `Authorization` header for an outbound
+call to a provider. It is always a `Bearer` token covering `base_url` (via
+`EndPointBlank::AccessTokens`, minting one if none is cached). It **never** falls back to `Basic`:
+a client must never send its own `client_id` / `client_secret` to a provider or to the provider's
+intake. When no token can be obtained it raises `EndPointBlank::TokenUnavailableError` instead.
 
 ```ruby
-EndPointBlank::Authorization.header # => "Basic ..."
+# Pass the URL you are about to call, NOT a hostname. Its userinfo, query and
+# fragment are removed before the token request; they are never sent to
+# intake, logged, or kept on the error.
+url = "https://api.example.com/orders"
 
-# Pass the URL you are about to call, NOT a hostname.
-# Strip any query string or fragment first -- intake rejects both.
-EndPointBlank::Authorization.header("https://api.example.com/orders") # => "Bearer ..." if a token is cached
+begin
+  auth = EndPointBlank::Authorization.header(url) # => "Bearer ..."
+  Excon.post(url, headers: { "Authorization" => auth }, body: payload)
+rescue EndPointBlank::TokenUnavailableError => e
+  # No token, so the provider was never called. e.outcome / e.status /
+  # e.failure say why (see "Why a token could not be minted" below): retry,
+  # degrade, or fail your own request -- but do not send credentials instead.
+  Rails.logger.warn(e.message)
+  raise
+end
 ```
+
+`base_url` is required. Until this release `header` with no argument returned `Basic` credentials; that
+form is gone, and `header(nil)` or `header("")` raises `ArgumentError`, as does a URL that cannot be
+parsed into a scheme and host (nothing is sent, and the message does not repeat the URL). The SDK's own calls to its
+own intake (authorize, token minting, endpoint updates, the log/request/response writers) still
+authenticate with `Basic`, which is safe because intake already holds this service's credential;
+they use the internal `EndPointBlank::Authorization.intake_header`, which is not for outbound
+calls.
+
+`TokenUnavailableError` (a subclass of `EndPointBlank::Error`) carries `base_url` (the URL with its
+userinfo, query and fragment removed; the raw value is never kept), `failure` (the
+`EndPointBlank::AccessTokens::Failure` recorded for the mint, or `nil`), and the shortcuts
+`outcome` and `status`. Its message names the stripped URL and a fixed reason for the outcome
+-- never intake's response body, which stays on `failure.reason` -- for example:
+
+```
+Could not mint an EndPointBlank access token for https://api.example.com/orders:
+intake rejected this application's client credential (HTTP 401); retrying cannot help --
+re-issue the credential. EndPointBlank never sends this service's client_id/client_secret to a
+provider, so there is no Basic-auth fallback and the call must not be made without a token.
+```
+
+| `outcome` | Reason in the message |
+|---|---|
+| `:credential_rejected` | `intake rejected this application's client credential (HTTP 401); retrying cannot help -- re-issue the credential` |
+| `:request_rejected` | `intake refused the token request (HTTP <status>); check the URL and that a grant covers the target` |
+| `:server_error` | `intake failed to issue a token (HTTP <status>); this may be transient` |
+| `:transport_error` | `intake could not be reached (timeout, connection refused or retries exhausted); this may be transient` |
+| `:transport_error`, the mint raised | `the token request failed unexpectedly` |
+| none recorded | `the token request failed for an unknown reason` |
+
+` (HTTP <status>)` is left out when there is no status.
+
+A mint that raises rather than reporting a failure -- a bug, not intake being unreachable -- is
+reported as this error too, with outcome `:transport_error`, `unexpected?` true and the exception
+as `cause`; its message is not copied into the error's. Only a missing credential's
+`ConfigurationError` escapes `header` as itself.
+
+The SDK's own calls to its intake raise `EndPointBlank::ConfigurationError` (also a subclass of
+`EndPointBlank::Error`) when `client_id` or `client_secret` is missing or empty, rather than
+sending an empty `Basic` credential.
 
 The argument is the URL you are about to call. intake matches it against registered base URLs by
 longest path prefix, so you need not know how the target registered itself -- `header` for
 `https://api.example.com/orders/42` reuses a token already cached for
 `https://api.example.com/orders`. `EndPointBlank::AccessTokens` caches one token per base URL
 intake resolves to, not one per process, so a service that calls several targets holds a token
-for each. A URL that does not match character-for-character (a different case, a query string,
-an unregistered path) simply misses and mints a new token -- it never guesses.
+for each. The lookup uses the URL with its userinfo, query and fragment removed; beyond that, a URL
+that does not match character-for-character (a different case, an unregistered path) simply
+misses and mints a new token -- it never guesses.
 
 ### Why a token could not be minted
 
-`EndPointBlank::AccessTokens.token` answers with a token String or `nil`, which is all most
-callers need. When `nil` is not enough — when you want to know whether retrying could possibly
-help — ask what went wrong:
+`EndPointBlank::AccessTokens.token` answers with a token String or `nil` (or raises, as itself,
+anything the mint raised that is not a transport error -- only `Authorization.header` wraps that),
+which is all most callers need. When `nil` is not enough — when you want to know whether retrying could possibly
+help — call `token_result` instead, which answers with the token or the `Failure` for that call:
 
 ```ruby
 url = "https://api.example.com/orders"
+result = EndPointBlank::AccessTokens.token_result(url)
 
-if EndPointBlank::AccessTokens.token(url).nil?
-  failure = EndPointBlank::AccessTokens.last_failure(url)
+if result.is_a?(EndPointBlank::AccessTokens::Failure)
+  failure = result
 
   case failure.outcome
   when :credential_rejected
@@ -220,10 +274,19 @@ if EndPointBlank::AccessTokens.token(url).nil?
 end
 ```
 
-`last_failure` returns `nil` once a mint for that URL succeeds again, so it never reports a
-problem that has already cleared. A `Failure` carries `base_url`, `outcome`, `status` (the HTTP
+`EndPointBlank::AccessTokens.last_failure(url)` still answers the last failure recorded for a
+URL, and returns `nil` once a mint for that URL succeeds again, so it never reports a problem
+that has already cleared. It is a shared slot, though: read after `token` returned `nil`, another
+thread may already have cleared or replaced it. When you need the reason for your own call, use
+`token_result`, whose `Failure` is captured inside the cache's lock for that call. A `Failure` carries `base_url`, `outcome`, `status` (the HTTP
 status, or `nil` when no usable one was obtained), `reason`, and `at`, and answers
 `#credential_rejected?`, `#request_rejected?`, `#server_error?` and `#transport_error?`.
+
+`token`, `token_result`, `exists?` and `last_failure` all remove the URL's userinfo, query and
+fragment first, so the cache, the failure record (and its `base_url`) and the log lines only ever
+hold the stripped URL. A URL that cannot be parsed into a scheme and host is never sent:
+`token_result` answers a `:request_rejected` `Failure` with no `status` and no `base_url`, and
+nothing is recorded.
 
 There is deliberately no `#retriable?` or other single retry/no-retry boolean. Retrying a `400`
 or a `422` is exactly as futile as retrying a `401` — intake answers `400` for an invalid
@@ -234,7 +297,9 @@ what you are going to do about it". Branch on the outcome instead.
 Classification is on the HTTP status first and the body second. A `401` whose body will not parse
 is still `:credential_rejected`: the SDK reaches intake through a proxy, and a WAF or load
 balancer can answer 401 with an HTML page intake never generated. `:transport_error` means one
-thing only — no usable HTTP status was obtained.
+thing only — no usable HTTP status was obtained because the request never completed (an Excon,
+socket, SSL or timeout error). Anything else raised while minting is not a transport error and
+propagates.
 
 The body decides exactly one thing, and only on a 2xx: whether a token was actually minted. A
 success means a token is there to read — the body parsed and carries a non-empty `token` and the

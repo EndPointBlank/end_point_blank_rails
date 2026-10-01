@@ -1,5 +1,93 @@
 # Changelog
 
+## Unreleased
+
+### Breaking changes
+
+- **Outbound calls never fall back to `Basic` any more (sc-1469).**
+  `EndPointBlank::Authorization.header(base_url)` used to answer
+  `"Basic base64(client_id:client_secret)"` whenever it could not obtain a
+  token -- a failed mint (401, 400/422, 5xx, a response with no `base_url`),
+  an intake timeout or outage -- which sent this service's own credential to
+  the provider it was calling. A client must never do that. It now answers
+  only `"Bearer <token>"`, and raises the new
+  `EndPointBlank::TokenUnavailableError` (a subclass of `EndPointBlank::Error`)
+  when no token can be had. The error carries `base_url` (stripped, see
+  below), `failure` (the `AccessTokens::Failure` for the mint), `outcome`
+  and `status`, and its message reads `Could not mint an EndPointBlank access
+  token for <url>: <reason>. EndPointBlank never sends this service's
+  client_id/client_secret to a provider, so there is no Basic-auth fallback
+  and the call must not be made without a token.` `<reason>` is one fixed
+  text per outcome, the same in every EndPointBlank SDK (for example
+  `intake refused the token request (HTTP 422); check the URL and that a
+  grant covers the target`); intake's response body and exception messages
+  never appear in it. The body is still on `failure.reason`. A mint that
+  raises anything other than `ConfigurationError` is reported as this error
+  too, with outcome `:transport_error`, `unexpected?` true, the text
+  `the token request failed unexpectedly`, and the exception as `cause`,
+  rather than escaping `header` as whatever it was.
+
+  Callers that relied on the fallback must now rescue
+  `TokenUnavailableError` and decide for themselves: retry, degrade, or fail
+  their own request.
+
+- **The URL's userinfo, query and fragment are removed before the token
+  request (sc-1469).** They are never sent to intake, logged, or kept on the
+  error: `Authorization.header` and the public `AccessTokens` entry points
+  (`token`, `token_result`, `exists?`, `last_failure`) strip the URL to
+  scheme, host, port and path first, and the cache, the failure record and
+  every log line use that form. `TokenUnavailableError#base_url` is the
+  stripped URL, not the one passed in. intake refuses a `base_url` carrying
+  any of them, so a URL that used to fail its mint with a 422 now mints. A
+  URL that cannot be parsed into a scheme and host is refused without a
+  request: `header` raises `ArgumentError` (without repeating the URL), and
+  `AccessTokens.token_result` answers a `:request_rejected` `Failure` with no
+  status.
+
+- **`Commands::GenerateAccessToken.token_result` reports only a request that
+  never completed as `:transport_error` (sc-1469).** That means an Excon,
+  socket, SSL or timeout error. Anything else raised while minting -- a bug,
+  such as a `NoMethodError` -- used to be filed under `:transport_error` too,
+  which read as "intake could not be reached" and dropped the exception. It
+  now propagates, and so `GenerateAccessToken.token`, `AccessTokens.token`
+  and `AccessTokens.token_result`, which used to answer `nil` or a
+  `:transport_error` `Failure` for it, now raise it; only
+  `Authorization.header` wraps it, and reports it as above.
+
+- **`Authorization.header` with no argument is removed.** `base_url` is now
+  required, and `header(nil)` / `header("")` raise `ArgumentError`. The
+  no-argument form returned `Basic` credentials and was only ever right for
+  the SDK's own calls to its own intake; those now use the internal
+  `Authorization.intake_header`, which behaves exactly as the old no-argument
+  `header` did. Do not use it for outbound calls to a provider.
+
+  Unchanged: authenticate/authorize, token minting, endpoint updates and the
+  log/request/response writers still authenticate to intake with `Basic`.
+
+- **A missing `client_id` or `client_secret` raises
+  `EndPointBlank::ConfigurationError`** (a subclass of `EndPointBlank::Error`)
+  when the SDK builds its own Basic header for intake, instead of sending
+  `Basic Og==`. This includes token minting, so `Authorization.header` raises
+  it too rather than reporting a transport error.
+
+### Added
+
+- **`EndPointBlank::AccessTokens.token_result(base_url)`** answers the token
+  String or the `AccessTokens::Failure` recorded for that very call, inside
+  the cache's lock. `token` followed by `last_failure` could report another
+  thread's reason, or none, and `Authorization.header` now uses
+  `token_result` so `TokenUnavailableError#failure` always describes its own
+  mint. `token` and `last_failure` are unchanged.
+
+### Deprecated
+
+- **`EndPointBlank::Commands::BearerGenerate`** (`generate` / `auth_header`)
+  now emits a one-time runtime deprecation warning
+  (`Kernel#warn(..., category: :deprecated)`, shown when
+  `Warning[:deprecated]` is on). Its header carries this service's own client
+  secret; use `EndPointBlank::Authorization.header(base_url)` for outbound
+  calls. It will be removed in a future release.
+
 ## 0.11.1
 
 ### Fixed

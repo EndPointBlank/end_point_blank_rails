@@ -19,7 +19,7 @@ module EndPointBlank
       end
 
       def auth
-        Authorization.header
+        Authorization.intake_header
       end
 
       def write(data)
