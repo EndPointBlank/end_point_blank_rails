@@ -201,7 +201,7 @@ module EndPointBlank
           end
           auth = Authorization.intake_header
           Excon.post(configuration.access_token_url,
-            headers: {'Authorization' => auth, 'Content-Type' => 'application/json'},
+            headers: EndPointBlank::Commands::Http.headers(auth),
             body: body.to_json,
             **EndPointBlank::Commands::Http::TIMEOUT_OPTIONS
           )

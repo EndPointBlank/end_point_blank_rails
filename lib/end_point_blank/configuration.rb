@@ -15,13 +15,24 @@ module EndPointBlank
     # assigned. See {#cache_ttl=}.
     DEFAULT_CACHE_TTL = 300
 
+    DEFAULT_BASE_URL = "https://in.endpointblank.com"
+
+    # sc-1463: an organization's intake answers at
+    # https://<slug>.in.endpointblank.com. See {#base_url}.
+    DERIVED_BASE_URL_SUFFIX = ".in.endpointblank.com"
+
+    # app_portal's Organizations.Slug.valid?/1: a domain label of up to 20
+    # [a-z0-9-] characters that starts and ends alphanumeric, then "-" and 6
+    # random characters. Copied, not loosened.
+    CLIENT_ID_SLUG = /\A[a-z0-9](?:[a-z0-9-]{0,18}[a-z0-9])?-[a-z0-9]{6}\z/
+
     attr_writer :client_id, :client_secret, :base_url, :log_base_url, :app_name, :env_name
 
     attr_accessor :worker_count, :log_mode,
                   :version_finder, :application_version, :token_ttl,
                   :masking_rules, :mask_hook, :logger, :trust_proxy_headers
 
-    attr_reader :cache_ttl
+    attr_reader :cache_ttl, :derive_base_url_from_client_id
 
     def initialize
       @worker_count = 4
@@ -30,6 +41,7 @@ module EndPointBlank
       @masking_rules = []
       @mask_hook = nil
       @trust_proxy_headers = true
+      @derive_base_url_from_client_id = false
     end
 
     # Sets the authorization decision cache's TTL, in whole seconds.
@@ -57,6 +69,52 @@ module EndPointBlank
       @cache_ttl = value
     end
 
+    # Whether {#base_url} may derive the intake hostname from a slug-prefixed
+    # {#client_id} when no base URL is set (sc-1463). Defaults to false,
+    # because *.in.endpointblank.com has no DNS or TLS in production yet; it
+    # will default to true in a later release.
+    #
+    # Only true or false: a String "true" from an env var must not quietly
+    # leave derivation off, and nothing else has a sensible reading. Like
+    # {#cache_ttl=}, anything else raises here, at configure time, and
+    # leaves the previous value in place.
+    #
+    # @raise [ArgumentError] if value is not true or false
+    def derive_base_url_from_client_id=(value)
+      unless [true, false].include?(value)
+        raise ArgumentError,
+              "EndPointBlank::Configuration#derive_base_url_from_client_id must be true or false, " \
+              "got #{value.inspect}."
+      end
+
+      @derive_base_url_from_client_id = value
+    end
+
+    # The organization slug a client_id names, or nil for one without it
+    # (issued before sc-1463).
+    #
+    # The same rule as app_portal's Credentials.client_id_slug/1 and every
+    # other EndPointBlank SDK: the part before the first "." must have the
+    # exact shape of an organization slug, and something must follow the
+    # dot. "Contains a ." is not enough, because app_portal has always
+    # accepted a typed client_id, so a legacy "my.client" can exist and must
+    # keep calling the default intake.
+    #
+    # @param client_id [Object] anything; only a String can carry a slug
+    # @return [String, nil]
+    def self.client_id_slug(client_id)
+      return nil unless client_id.is_a?(String)
+      # Total, like Elixir's: split and match? raise on invalid bytes or on an
+      # encoding that is not ASCII-compatible (UTF-16), and neither can be a
+      # credential that authenticates.
+      return nil unless client_id.valid_encoding? && client_id.encoding.ascii_compatible?
+
+      slug, random = client_id.split(".", 2)
+      return nil if random.nil? || random.empty?
+
+      CLIENT_ID_SLUG.match?(slug) ? slug : nil
+    end
+
     # Returns the configured client id, falling back to the
     # ENDPOINTBLANK_CLIENT_ID environment variable when not explicitly set.
     def client_id
@@ -70,9 +128,11 @@ module EndPointBlank
     end
 
     # Returns the configured base URL, falling back to the
-    # ENDPOINTBLANK_BASE_URL environment variable, then a built-in default.
+    # ENDPOINTBLANK_BASE_URL environment variable, then -- only while
+    # {#derive_base_url_from_client_id} is on -- the hostname derived from a
+    # slug-prefixed {#client_id}, then a built-in default.
     def base_url
-      @base_url || ENV["ENDPOINTBLANK_BASE_URL"] || "https://in.endpointblank.com"
+      @base_url || ENV["ENDPOINTBLANK_BASE_URL"] || derived_base_url || DEFAULT_BASE_URL
     end
 
     # Returns the configured log base URL, falling back to the
@@ -134,6 +194,22 @@ module EndPointBlank
     # ENDPOINTBLANK_ENV environment variable when not explicitly set.
     def env_name
       @env_name || ENV["ENDPOINTBLANK_ENV"]
+    end
+
+    private
+
+    # sc-1463: a new client_id is "<organization slug>.<random>", and that
+    # organization's intake answers at https://<slug>.in.endpointblank.com.
+    # Only while derive_base_url_from_client_id is on: *.in.endpointblank.com
+    # has no DNS or TLS in production yet, so it defaults off, and off means
+    # today's default for every client_id. Logs are not derived: whether they
+    # get a per-organization hostname is still open, so log_base_url keeps its
+    # own default.
+    def derived_base_url
+      return nil unless @derive_base_url_from_client_id == true
+
+      slug = self.class.client_id_slug(client_id)
+      slug && "https://#{slug}#{DERIVED_BASE_URL_SUFFIX}"
     end
   end
 end

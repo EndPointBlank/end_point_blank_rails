@@ -242,6 +242,65 @@ RSpec.describe EndPointBlank::Commands::EndpointAuthorize do
 
       expect(authorize_calls).not_to be_empty
     end
+
+    # sc-1463 conformance: intake answers 503 and 429 about the moment, not
+    # the grant. Caching either would keep refusing for the whole TTL after
+    # intake recovered.
+    [503, 429].each do |status|
+      it "does not cache a #{status}, and the next request authorizes once intake does" do
+        authorize_queue.replace([http_response(status, JSON.generate(error: "busy")),
+                                 http_response(201, authorized_body)])
+
+        expect(described_class.authorize(request_double).status).to eq(status)
+        expect(described_class.authorize(request_double).status).to eq(201)
+
+        expect(authorize_calls.size).to eq(2)
+      end
+    end
+  end
+
+  # sc-1463: with derivation on, a prefixed client_id sends every intake call
+  # to its organization's hostname; off, to the configured or default one.
+  describe "the intake it calls" do
+    let(:called_urls) { [] }
+
+    around do |example|
+      original = %i[@base_url @derive_base_url_from_client_id].each_with_object({}) do |ivar, memo|
+        memo[ivar] = configuration.instance_variable_get(ivar)
+      end
+      original_env = ENV.delete("ENDPOINTBLANK_BASE_URL")
+
+      example.run
+
+      original.each { |ivar, value| configuration.instance_variable_set(ivar, value) }
+      ENV["ENDPOINTBLANK_BASE_URL"] = original_env unless original_env.nil?
+    end
+
+    before do
+      configuration.base_url = nil
+      configuration.client_id = "acima-x7k2mq.ijXI+MVwmrC5xH/9ZuGiQlAbAyobTqMa"
+
+      allow(Excon).to receive(:post) do |url, _options|
+        called_urls << url
+        http_response(201, authorized_body)
+      end
+    end
+
+    it "is the organization's hostname when derivation is on and no base_url is set" do
+      configuration.derive_base_url_from_client_id = true
+
+      described_class.authorize(request_double)
+
+      expect(called_urls).to eq(["https://acima-x7k2mq.in.endpointblank.com/api/authorize"])
+    end
+
+    it "is the default intake when derivation is off, whatever the client_id" do
+      configuration.derive_base_url_from_client_id = false
+
+      described_class.authorize(request_double)
+
+      expect(called_urls).to eq(["https://in.endpointblank.com/api/authorize"])
+    end
   end
 
   describe "what counts as a different authorization" do
