@@ -8,9 +8,9 @@ Gem::Specification.new do |spec|
   spec.authors = ["Robert A. Lasch"]
   spec.email = ["rlasch@gmail.com"]
 
-  spec.summary = "Ruby/Rails client for EndPointBlank — endpoint tracking, authorization, and error/request/response/log reporting."
-  spec.description = "EndPointBlank client library for Ruby. A framework-agnostic core runs in plain Ruby / Sinatra, with Rails supported as an auto-loaded adapter. Provides API endpoint tracking, authorization, and error/request/response/log reporting."
-  spec.homepage = "https://github.com/EndPointBlank/end_point_blank_rails"
+  spec.summary = "Ruby and Rails SDK for EndPointBlank: authorize service-to-service API calls, report endpoint versions, and see which clients still call deprecated API versions."
+  spec.description = "Ruby and Rails SDK for EndPointBlank: authorize service-to-service (machine-to-machine) API calls, report endpoint versions, and see which clients still call deprecated API versions before you sunset them. A framework-agnostic core runs in plain Ruby / Sinatra, with Rails supported as an auto-loaded adapter."
+  spec.homepage = "https://endpointblank.com"
   spec.required_ruby_version = ">= 3.4.2"
   spec.license = "Nonstandard"
 
@@ -18,6 +18,8 @@ Gem::Specification.new do |spec|
 
   spec.metadata["homepage_uri"] = spec.homepage
   spec.metadata["source_code_uri"] = "https://github.com/EndPointBlank/end_point_blank_rails"
+  spec.metadata["documentation_uri"] = "https://endpointblank.com/docs/sdk-setup"
+  spec.metadata["bug_tracker_uri"] = "https://github.com/EndPointBlank/end_point_blank_rails/issues"
   spec.metadata["changelog_uri"] = "https://github.com/EndPointBlank/end_point_blank_rails/releases"
 
   # Specify which files should be added to the gem when it is released.
