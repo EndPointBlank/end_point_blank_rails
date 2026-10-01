@@ -622,6 +622,30 @@ RSpec.describe "EndPointBlank::AccessTokens against the token endpoint" do
 
       expect(instance.token(base_url)).to eq("recovered")
     end
+
+    # sc-1463 conformance: a 503 or a 429 is an answer about this moment, not
+    # about the credential, so nothing may hold on to it -- the very next call
+    # asks intake again, and succeeds once intake does.
+    [503, 429].each do |status|
+      it "does not cache a #{status}: the next call mints again" do
+        allow(Excon).to receive(:post).and_return(
+          double("response", status: status, body: JSON.generate(error: "busy"))
+        )
+
+        expect(instance.token(base_url)).to be_nil
+        expect(instance.token(base_url)).to be_nil
+        expect(Excon).to have_received(:post).twice
+        expect(instance.exists?(base_url)).to be(false)
+
+        allow(Excon).to receive(:post).and_return(
+          double("response", status: 200, body: JSON.generate(token: "recovered", expired_at: (Time.now + 3600).utc.iso8601,
+                                                              base_url: base_url))
+        )
+
+        expect(instance.token(base_url)).to eq("recovered")
+        expect(instance.last_failure(base_url)).to be_nil
+      end
+    end
   end
 
   # A cold cache never runs the comparison inside match_key (the loop body

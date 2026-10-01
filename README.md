@@ -105,6 +105,7 @@ still reaches the live value, the same as mutating it through `EndPointBlank.log
 | `mask_hook` | — | `nil` | Optional `->(payload, record_type_string) { payload }` run after `masking_rules`. |
 | `version_finder` | — | `nil` | Optional `->(request) { "1" }` overriding `EndPointBlank::Commands::VersionFinder`'s default header/param/path detection. |
 | `application_version` | — | `nil` | Reserved for reporting your app's own version. |
+| `derive_base_url_from_client_id` | — | `false` | Derive the intake hostname from a slug-prefixed `client_id` when no `base_url` is set. See [Intake hostname from `client_id`](#intake-hostname-from-client_id). Only `true` or `false`; anything else raises `ArgumentError` at configure time. |
 
 Note: there is also a bare `environment` accessor on `Configuration`, but it is not read by any
 code path in this gem (the real per-request environment name is `env_name`, described above) — do
@@ -138,6 +139,42 @@ forwarded headers there would not report *nothing* — it would confidently repo
 hostname on an internal port. `host` is caller-controlled either way (it has always come from
 the `Host` header), and none of these three values is ever used as an identity or
 authorization key, so the worst case is a wrong *suggestion* that an admin has to approve.
+
+### Intake hostname from `client_id`
+
+Each organization's intake will answer at its own hostname,
+`https://<slug>.in.endpointblank.com`, and every new `client_id` starts with
+that slug and a dot (`acima-x7k2mq.ijXI+MVwmrC5xH/9ZuGiQlAbAyobTqMa`). With
+`c.derive_base_url_from_client_id = true`, the gem picks its intake in this
+order:
+
+1. `base_url`, or else `ENDPOINTBLANK_BASE_URL`, if either is set;
+2. else, if the `client_id` carries a slug prefix,
+   `https://<slug>.in.endpointblank.com`;
+3. else `https://in.endpointblank.com`.
+
+A `client_id` carries a slug prefix only when the part before its first `.`
+has the exact shape of an organization slug and something follows the dot
+(`EndPointBlank::Configuration.client_id_slug`). A credential issued before
+slugs, including one with a `.` in it such as `my.client`, keeps calling
+`https://in.endpointblank.com`.
+
+**This is off by default, and turns on by default in a later release, once
+DNS and TLS for `*.in.endpointblank.com` are live.** Until then those
+hostnames do not resolve in production, so leave it off unless EndPointBlank
+has told you otherwise. With it off, the base URL is `base_url`, else
+`ENDPOINTBLANK_BASE_URL`, else `https://in.endpointblank.com`, whatever the
+`client_id`.
+
+The logs hostname is not derived: `log_base_url`, else
+`ENDPOINTBLANK_LOG_BASE_URL`, else `https://log.endpointblank.com`, as before.
+
+Every call to intake also sends `x-epb-sdk: ruby/<version>`, so
+EndPointBlank can tell which SDK versions use a credential before it moves an
+organization to another intake. The minimum Ruby version for a move is the
+release that turns `derive_base_url_from_client_id` on by default, **not**
+this one: with the option at its default here, the gem keeps calling
+`https://in.endpointblank.com` after its organization has moved.
 
 ### `configure` block example
 

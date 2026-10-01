@@ -28,7 +28,7 @@ module EndPointBlank
           "app_version=#{data[:app_version]}"
 
         response = Excon.post(configuration.endpoint_update_url,
-          headers: {'Authorization' => auth, 'Content-Type' => 'application/json'},
+          headers: EndPointBlank::Commands::Http.headers(auth),
           body: data.to_json,
           **EndPointBlank::Commands::Http::TIMEOUT_OPTIONS
         )

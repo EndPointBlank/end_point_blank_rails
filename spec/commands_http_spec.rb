@@ -36,4 +36,43 @@ RSpec.describe EndPointBlank::Commands::Http do
       expect(logger).to have_received(:error)
     end
   end
+
+  # sc-1463: intake will record the oldest SDK version seen per credential,
+  # which gates moving an organization to another intake.
+  describe "x-epb-sdk" do
+    it "names this SDK and its version" do
+      expect(described_class.sdk_header).to eq("ruby/#{EndPointBlank::VERSION}")
+    end
+
+    it "is sent on every post, alongside the authorization header" do
+      allow(Excon).to receive(:post).and_return(double(status: 200))
+
+      described_class.post("http://example.test", "Basic abc", { a: 1 })
+
+      expect(Excon).to have_received(:post).with(
+        "http://example.test",
+        hash_including(headers: hash_including("x-epb-sdk" => "ruby/#{EndPointBlank::VERSION}",
+                                               "Authorization" => "Basic abc"))
+      )
+    end
+
+    it "is sent when minting an access token and when sending an endpoint update" do
+      sent = []
+      allow(Excon).to receive(:post) do |url, options|
+        sent << [url, options[:headers]["x-epb-sdk"]]
+        double(status: 500, body: "{}")
+      end
+      configuration = EndPointBlank::Configuration.instance
+      allow(configuration).to receive(:client_id).and_return("cid")
+      allow(configuration).to receive(:client_secret).and_return("csecret")
+
+      EndPointBlank::Commands::GenerateAccessToken.token_result("https://target.example.test")
+      EndPointBlank::Commands::EndpointUpdate.new.write({ application: "a", environment: "e" })
+
+      expect(sent).to eq([
+        [configuration.access_token_url, "ruby/#{EndPointBlank::VERSION}"],
+        [configuration.endpoint_update_url, "ruby/#{EndPointBlank::VERSION}"]
+      ])
+    end
+  end
 end

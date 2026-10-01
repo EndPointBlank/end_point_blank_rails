@@ -242,6 +242,173 @@ RSpec.describe EndPointBlank::Configuration do
     end
   end
 
+  # sc-1463. *.in.endpointblank.com has no DNS or TLS in production yet, so
+  # derivation is off by default, and off must mean exactly today's answer.
+  #
+  # Not in CONFIGURATION_SPEC_IVARS, for the same reason as cache_ttl: nil is
+  # a value this setting must never hold. Snapshot and restore the ivar.
+  describe "base_url derived from client_id (sc-1463)" do
+    let(:prefixed) { "acima-x7k2mq.ijXI+MVwmrC5xH/9ZuGiQlAbAyobTqMa" }
+    let(:default_base_url) { "https://in.endpointblank.com" }
+    let(:derived) { "https://acima-x7k2mq.in.endpointblank.com" }
+
+    around do |example|
+      original = configuration.instance_variable_get(:@derive_base_url_from_client_id)
+      configuration.instance_variable_set(:@derive_base_url_from_client_id, false)
+      example.run
+      configuration.instance_variable_set(:@derive_base_url_from_client_id, original)
+    end
+
+    it "is off by default" do
+      # A fresh instance, not the shared singleton: see "#cache_ttl".
+      expect(described_class.send(:new).derive_base_url_from_client_id).to be(false)
+    end
+
+    it "with derivation off, every client_id resolves to today's default" do
+      [prefixed, "plain-client-id", "my.client", nil].each do |client_id|
+        configuration.client_id = client_id
+
+        expect(configuration.base_url).to eq(default_base_url)
+        expect(configuration.authorize_url).to eq("#{default_base_url}/api/authorize")
+        expect(configuration.access_token_url).to eq("#{default_base_url}/api/access_token")
+      end
+    end
+
+    it "with derivation off, a prefixed ENDPOINTBLANK_CLIENT_ID changes nothing" do
+      ENV["ENDPOINTBLANK_CLIENT_ID"] = prefixed
+
+      expect(configuration.base_url).to eq(default_base_url)
+    end
+
+    it "with derivation on, a slug-prefixed client_id calls its organization's intake" do
+      EndPointBlank.configure do |c|
+        c.derive_base_url_from_client_id = true
+        c.client_id = prefixed
+      end
+
+      expect(configuration.base_url).to eq(derived)
+      expect(configuration.authorize_url).to eq("#{derived}/api/authorize")
+      expect(configuration.access_token_url).to eq("#{derived}/api/access_token")
+      expect(configuration.endpoint_update_url).to eq("#{derived}/api/application_updates")
+    end
+
+    it "with derivation on, the client_id may come from ENDPOINTBLANK_CLIENT_ID" do
+      ENV["ENDPOINTBLANK_CLIENT_ID"] = prefixed
+      EndPointBlank.configure { |c| c.derive_base_url_from_client_id = true }
+
+      expect(configuration.base_url).to eq(derived)
+    end
+
+    it "with derivation on, an explicit base_url still wins" do
+      EndPointBlank.configure do |c|
+        c.derive_base_url_from_client_id = true
+        c.client_id = prefixed
+        c.base_url = "https://explicit.example"
+      end
+
+      expect(configuration.base_url).to eq("https://explicit.example")
+    end
+
+    it "with derivation on, ENDPOINTBLANK_BASE_URL still wins" do
+      ENV["ENDPOINTBLANK_BASE_URL"] = "https://env.example"
+      EndPointBlank.configure do |c|
+        c.derive_base_url_from_client_id = true
+        c.client_id = prefixed
+      end
+
+      expect(configuration.base_url).to eq("https://env.example")
+    end
+
+    it "with derivation on, a client_id without a slug prefix calls the default intake" do
+      configuration.derive_base_url_from_client_id = true
+
+      # "my.client" has a dot but no slug before it: the portal has always
+      # accepted a typed client_id, so a legacy id like this can exist.
+      [
+        "plain-client-id",
+        "ijXI+MVwmrC5xH/9ZuGiQlAbAyobTqMa",
+        "my.client",
+        "acima-x7k2mq.",
+        ".acima-x7k2mq",
+        "Acima-x7k2mq.abc",
+        "acima-x7k2m.abc",
+        "acima-x7k2mqq.abc",
+        "-acima-x7k2mq.abc",
+        "acima--x7k2mq.abc"
+      ].each do |client_id|
+        configuration.client_id = client_id
+
+        expect(configuration.base_url)
+          .to eq(default_base_url), "expected #{client_id.inspect} to call the default intake"
+      end
+    end
+
+    it "with derivation on and no client_id, calls the default intake" do
+      configuration.derive_base_url_from_client_id = true
+
+      expect(configuration.base_url).to eq(default_base_url)
+    end
+
+    it "never derives the logs hostname" do
+      configuration.derive_base_url_from_client_id = true
+      configuration.client_id = prefixed
+
+      expect(configuration.log_base_url).to eq("https://log.endpointblank.com")
+      expect(configuration.logs_url).to eq("https://log.endpointblank.com/api/application_logs")
+    end
+
+    it "refuses a value that is not a boolean, applying nothing" do
+      ["true", 1, nil, :yes].each do |invalid|
+        expect do
+          EndPointBlank.configure do |c|
+            c.client_id = prefixed
+            c.derive_base_url_from_client_id = invalid
+          end
+        end.to raise_error(ArgumentError, /derive_base_url_from_client_id.*got #{Regexp.escape(invalid.inspect)}/)
+
+        expect(configuration.client_id).to be_nil
+        expect(configuration.derive_base_url_from_client_id).to be(false)
+      end
+    end
+  end
+
+  describe ".client_id_slug (sc-1463)" do
+    it "answers the slug of a prefixed client_id" do
+      expect(described_class.client_id_slug("acima-x7k2mq.ijXI+MVwmrC5xH/9ZuGiQlAbAyobTqMa")).to eq("acima-x7k2mq")
+
+      # The longest label app_portal makes: 20 characters, then the random part.
+      expect(described_class.client_id_slug("abcdefghij0123456789-x7k2mq.r")).to eq("abcdefghij0123456789-x7k2mq")
+
+      # The fallback label for an organization with no usable name.
+      expect(described_class.client_id_slug("org-x7k2mq.r")).to eq("org-x7k2mq")
+    end
+
+    it "splits on the first dot only" do
+      expect(described_class.client_id_slug("acima-x7k2mq.a.b")).to eq("acima-x7k2mq")
+    end
+
+    it "answers nil for anything else" do
+      [
+        nil,
+        "",
+        "no-dot",
+        "my.client",
+        "acima-x7k2mq.",
+        "abcdefghij01234567890-x7k2mq.r",
+        "acima-x7k2mq-.r",
+        "acima_x7k2mq.r",
+        # Nothing outside [a-z0-9-] may reach the derived hostname.
+        "acima-x7k2mq\n.r",
+        "evil.com@acima-x7k2mq.r",
+        "a:1-x7k2mq.r",
+        "ACIMA-X7K2MQ.r",
+        123
+      ].each do |value|
+        expect(described_class.client_id_slug(value)).to be_nil, "expected nil for #{value.inspect}"
+      end
+    end
+  end
+
   # sc-1266: the sc-970 reviews found that this SDK's configure block applied
   # each assignment to the live singleton as the block executed, so a field
   # set before an invalid one stuck even though the whole call raised. This
@@ -723,7 +890,8 @@ RSpec.describe EndPointBlank::Configuration do
         masking_rules: [{ target: "sentinel" }],
         mask_hook: proc { |value| value },
         logger: Logger.new(IO::NULL),
-        trust_proxy_headers: false
+        trust_proxy_headers: false,
+        derive_base_url_from_client_id: true
       }
       setter_fields = described_class.public_instance_methods(false).grep(/=\z/) - [:cache_ttl=]
       expect(setter_fields.map { |setter| setter.to_s.delete_suffix("=").to_sym }).to match_array(sentinel_values.keys)
