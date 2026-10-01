@@ -21,7 +21,11 @@
   text per outcome, the same in every EndPointBlank SDK (for example
   `intake refused the token request (HTTP 422); check the URL and that a
   grant covers the target`); intake's response body and exception messages
-  never appear in it. The body is still on `failure.reason`.
+  never appear in it. The body is still on `failure.reason`. A mint that
+  raises anything other than `ConfigurationError` is reported as this error
+  too, with outcome `:transport_error`, `unexpected?` true, the text
+  `the token request failed unexpectedly`, and the exception as `cause`,
+  rather than escaping `header` as whatever it was.
 
   Callers that relied on the fallback must now rescue
   `TokenUnavailableError` and decide for themselves: retry, degrade, or fail
@@ -39,6 +43,13 @@
   request: `header` raises `ArgumentError` (without repeating the URL), and
   `AccessTokens.token_result` answers a `:request_rejected` `Failure` with no
   status.
+
+- **`Commands::GenerateAccessToken.token_result` reports only a request that
+  never completed as `:transport_error` (sc-1469).** That means an Excon,
+  socket, SSL or timeout error. Anything else raised while minting -- a bug,
+  such as a `NoMethodError` -- used to be filed under `:transport_error` too,
+  which read as "intake could not be reached" and dropped the exception. It
+  now propagates, and `Authorization.header` reports it as above.
 
 - **`Authorization.header` with no argument is removed.** `base_url` is now
   required, and `header(nil)` / `header("")` raise `ArgumentError`. The

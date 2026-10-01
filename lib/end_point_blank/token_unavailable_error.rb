@@ -28,15 +28,28 @@ module EndPointBlank
   # (:credential_rejected, :request_rejected, :server_error,
   # :transport_error) exactly as it would after calling
   # {AccessTokens.last_failure} itself.
+  #
+  # A mint that raised is constructed with `unexpected: true` and reported as
+  # :transport_error, with the exception as `cause` (Ruby sets it when this
+  # is raised from the rescue). Its message is deliberately not copied into
+  # this one.
   class TokenUnavailableError < Error
     attr_reader :base_url, :failure
 
     # @param base_url [String] the URL the token was wanted for
     # @param failure [AccessTokens::Failure, nil] why the mint failed
-    def initialize(base_url, failure = nil)
+    # @param unexpected [Boolean] true when the mint raised rather than
+    #   reporting a failure
+    def initialize(base_url, failure = nil, unexpected: false)
       @base_url = TargetUrl.strip(base_url)
       @failure = failure
+      @unexpected = unexpected
       super(build_message)
+    end
+
+    # @return [Boolean] true when the mint raised; `cause` holds what it raised
+    def unexpected?
+      @unexpected
     end
 
     # @return [Symbol, nil] the failure outcome, or nil when none was recorded
@@ -59,6 +72,9 @@ module EndPointBlank
     # message is what reaches logs and error reporting, and neither is ours
     # to vouch for. Failure#reason stays available on #failure.
     def reason
+      # Before the outcome, because a mint that raised is also :transport_error.
+      return "the token request failed unexpectedly" if unexpected?
+
       http = status ? " (HTTP #{status})" : ""
 
       case outcome

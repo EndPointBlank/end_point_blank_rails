@@ -226,15 +226,29 @@ RSpec.describe EndPointBlank::Commands::GenerateAccessToken do
       expect(result.status).to be_nil
     end
 
-    it "reports a response object that cannot even yield a status as a transport error" do
+    [
+      Errno::ECONNREFUSED.new, SocketError.new("getaddrinfo"), OpenSSL::SSL::SSLError.new("handshake"),
+      Timeout::Error.new("execution expired")
+    ].each do |error|
+      it "reports a request that never completed (#{error.class}) as a transport error" do
+        allow(Excon).to receive(:post).and_raise(error)
+
+        result = described_class.token_result("https://example.com")
+
+        expect(result).to be_transport_error
+        expect(result.status).to be_nil
+      end
+    end
+
+    # sc-1469: a bug is not an unreachable intake. Calling it a transport
+    # error sent the reader off to check the network and dropped the
+    # exception; Authorization.header reports it instead.
+    it "lets anything else raised while minting propagate rather than calling it a transport error" do
       broken = double("response")
       allow(broken).to receive(:status).and_raise(NoMethodError.new("no status"))
       allow(Excon).to receive(:post).and_return(broken)
 
-      result = described_class.token_result("https://example.com")
-
-      expect(result).to be_transport_error
-      expect(result.status).to be_nil
+      expect { described_class.token_result("https://example.com") }.to raise_error(NoMethodError, "no status")
     end
 
     it "still logs the response status and never the body" do

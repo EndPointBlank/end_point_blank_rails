@@ -32,7 +32,11 @@ module EndPointBlank
       #   returned Basic credentials, and the calls to intake itself now use
       #   {intake_header}.
       # @raise [TokenUnavailableError] when no token can be obtained; its
-      #   `failure` says why.
+      #   `failure` says why. Anything unexpected raised while minting is
+      #   reported the same way, as a :transport_error with that exception
+      #   as `cause`.
+      # @raise [ConfigurationError] when client_id or client_secret is
+      #   missing; nothing is sent.
       def header(base_url)
         if base_url.nil? || base_url.to_s.empty?
           raise ArgumentError,
@@ -52,7 +56,19 @@ module EndPointBlank
         # The reason must come from this call, captured under the cache's
         # mutex -- not from `last_failure` read afterwards, which another
         # thread can clear or overwrite in between.
-        result = EndPointBlank::AccessTokens.token_result(target)
+        begin
+          result = EndPointBlank::AccessTokens.token_result(target)
+        rescue ConfigurationError
+          raise
+        rescue StandardError
+          # A bug, not a failure intake reported: an unreachable intake
+          # arrives as a Failure, not a raise. It still becomes the one
+          # error this method documents, so a caller handling
+          # TokenUnavailableError is not met by a NoMethodError instead.
+          # Ruby sets the exception as `cause`; its message stays out of ours.
+          raise TokenUnavailableError.new(target, unexpected_failure(target), unexpected: true)
+        end
+
         unless result.is_a?(String)
           failure = result.is_a?(EndPointBlank::AccessTokens::Failure) ? result : nil
           raise TokenUnavailableError.new(target, failure)
@@ -60,6 +76,16 @@ module EndPointBlank
 
         "Bearer #{result}"
       end
+
+      # The failure {header} reports for a mint that raised. The cache
+      # records nothing for one, so there is no recorded Failure to hand on.
+      def unexpected_failure(target)
+        EndPointBlank::AccessTokens::Failure.new(
+          base_url: target, outcome: :transport_error, status: nil,
+          reason: "the token request failed unexpectedly", at: Time.now
+        )
+      end
+      private :unexpected_failure
 
       # The Basic header for the SDK's own calls to its own intake --
       # authenticate/authorize, token minting, endpoint updates and the

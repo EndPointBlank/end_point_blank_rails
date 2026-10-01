@@ -2,6 +2,9 @@
 
 require 'excon'
 require "json"
+require "openssl"
+require "socket"
+require "timeout"
 require_relative 'http'
 require_relative '../configuration_error'
 require_relative '../target_url'
@@ -99,6 +102,14 @@ module EndPointBlank
     end
 
     module GenerateAccessTokenMethods
+      # What a request that never completed raises: Excon's own errors (its
+      # timeouts and socket failures among them), and the socket, SSL and
+      # timeout errors underneath, in case one arrives unwrapped. Only these
+      # are a :transport_error.
+      TRANSPORT_ERRORS = [
+        Excon::Error, SystemCallError, SocketError, OpenSSL::SSL::SSLError, Timeout::Error
+      ].freeze
+
       module ClassMethods
         def configuration
           EndPointBlank::Configuration.instance
@@ -110,6 +121,10 @@ module EndPointBlank
         #   userinfo, query and fragment are never sent ({TargetUrl.strip}).
         # @return [AccessTokenResult] never nil. A URL that cannot be parsed
         #   is :request_rejected with no status, and nothing is sent.
+        # @raise [ConfigurationError] when client_id or client_secret is
+        #   missing; nothing is sent.
+        # @raise [StandardError] anything raised while minting that is not
+        #   one of {TRANSPORT_ERRORS}; see the rescue below.
         def token_result(base_url)
           # Defensive: AccessTokens already strips, but this is callable on
           # its own and must not put a raw URL in the request body either.
@@ -141,9 +156,13 @@ module EndPointBlank
           # Missing client credentials are not a transport error: nothing was
           # sent, and retrying cannot help. Let it be seen (sc-1469).
           raise
-        rescue => e
-          # Reached only when there is no status to classify on: the request
-          # never completed, or the response object would not yield one.
+        rescue *TRANSPORT_ERRORS => e
+          # Reached only when the request never completed, so there is no
+          # status to classify on. Anything else raised above is a bug, not
+          # an unreachable intake, and calling it a transport error would
+          # send the reader off to check the network: it propagates, and
+          # Authorization.header reports it as "the token request failed
+          # unexpectedly" with the exception as its cause (sc-1469).
           EndPointBlank.logger.error "Error occurred during authentication: #{e.message}\n #{e.backtrace.join("\n")}"
           transport_error
         end

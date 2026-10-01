@@ -222,9 +222,15 @@ provider, so there is no Basic-auth fallback and the call must not be made witho
 | `:request_rejected` | `intake refused the token request (HTTP <status>); check the URL and that a grant covers the target` |
 | `:server_error` | `intake failed to issue a token (HTTP <status>); this may be transient` |
 | `:transport_error` | `intake could not be reached (timeout, connection refused or retries exhausted); this may be transient` |
+| `:transport_error`, the mint raised | `the token request failed unexpectedly` |
 | none recorded | `the token request failed for an unknown reason` |
 
 ` (HTTP <status>)` is left out when there is no status.
+
+A mint that raises rather than reporting a failure -- a bug, not intake being unreachable -- is
+reported as this error too, with outcome `:transport_error`, `unexpected?` true and the exception
+as `cause`; its message is not copied into the error's. Only a missing credential's
+`ConfigurationError` escapes `header` as itself.
 
 The SDK's own calls to its intake raise `EndPointBlank::ConfigurationError` (also a subclass of
 `EndPointBlank::Error`) when `client_id` or `client_secret` is missing or empty, rather than
@@ -290,7 +296,9 @@ what you are going to do about it". Branch on the outcome instead.
 Classification is on the HTTP status first and the body second. A `401` whose body will not parse
 is still `:credential_rejected`: the SDK reaches intake through a proxy, and a WAF or load
 balancer can answer 401 with an HTML page intake never generated. `:transport_error` means one
-thing only — no usable HTTP status was obtained.
+thing only — no usable HTTP status was obtained because the request never completed (an Excon,
+socket, SSL or timeout error). Anything else raised while minting is not a transport error and
+propagates.
 
 The body decides exactly one thing, and only on a 2xx: whether a token was actually minted. A
 success means a token is there to read — the body parsed and carries a non-empty `token` and the

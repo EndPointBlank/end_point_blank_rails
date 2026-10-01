@@ -160,6 +160,43 @@ RSpec.describe EndPointBlank::Authorization do
       )
     end
 
+    # sc-1469 review: a mint that raised (a bug, not intake's answer) used to
+    # escape `header` as whatever it was, or be reported as intake being
+    # unreachable. It is the documented error, with the exception as cause.
+    it "words a mint that raised exactly, keeping the exception as cause and out of the message" do
+      allow(EndPointBlank::AccessTokens).to receive(:token_result).and_raise(RuntimeError, "s3cret detail")
+
+      expect { described_class.header(base_url) }.to raise_error(EndPointBlank::TokenUnavailableError) { |error|
+        expect(error.base_url).to eq(base_url)
+        expect(error.outcome).to eq(:transport_error)
+        expect(error.status).to be_nil
+        expect(error).to be_unexpected
+        expect(error.cause).to be_a(RuntimeError)
+        expect(error.cause.message).to eq("s3cret detail")
+        expect(error.message).to eq(
+          "Could not mint an EndPointBlank access token for #{base_url}: the token request failed " \
+          "unexpectedly. EndPointBlank never sends this service's client_id/client_secret to a provider, " \
+          "so there is no Basic-auth fallback and the call must not be made without a token."
+        )
+        # "s3cret", not "secret": the fixed text itself names client_secret.
+        expect(error.message).not_to include("s3cret")
+        expect(error.message).not_to include("RuntimeError")
+      }
+    end
+
+    it "reports a bug inside the mint the same way, not as intake being unreachable" do
+      broken = double("response")
+      allow(broken).to receive(:status).and_raise(NoMethodError.new("no status"))
+      record_posts { broken }
+
+      expect { described_class.header(base_url) }.to raise_error(EndPointBlank::TokenUnavailableError) { |error|
+        expect(error.outcome).to eq(:transport_error)
+        expect(error.cause).to be_a(NoMethodError)
+        expect(error.message).to include(": the token request failed unexpectedly. ")
+        expect(error.message).not_to include("could not be reached")
+      }
+    end
+
     it "says so when no reason was recorded" do
       expect(EndPointBlank::TokenUnavailableError.new(base_url).message).to eq(
         "Could not mint an EndPointBlank access token for #{base_url}: the token request failed for an " \
