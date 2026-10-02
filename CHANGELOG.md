@@ -32,9 +32,9 @@
     `Enumerator` without a block.
   - Every POST sends an `Idempotency-Key` (a random UUID v4 unless you pass
     `idempotency_key:`), and a retry sends the same one.
-  - A 429 is retried after its `Retry-After` seconds (1 second without one); a 5xx or a request
-    that got no answer is retried with backoff for GET, DELETE and POST,
-    never for PATCH; `idempotency_request_in_progress` is retried with the
+  - A 429 is retried after its `Retry-After` seconds (1 second without
+    one); a 5xx or a request that got no answer is retried with backoff for
+    GET, DELETE and POST, never for PATCH; `idempotency_request_in_progress` is retried with the
     same key. At most 2 retries by default (`max_retries:`, `0` turns them
     off), and no single wait longer than `max_retry_wait:` (60 seconds).
   - Every refusal raises `EndPointBlank::Management::Error` (a subclass of

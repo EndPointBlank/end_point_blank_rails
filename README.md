@@ -595,26 +595,38 @@ Optional keyword arguments left `nil` are not sent.
 ### Invite a client and assign an API package
 
 ```ruby
+# Environment names are unique per organization, and "production" is reserved for the one every
+# organization already has; look an existing one up with mgmt.environments.each instead.
 staging = mgmt.environments.create(name: "staging", domain: "staging.example.com")
 orders  = mgmt.applications.create(name: "Orders",
                                    environment_base_urls: { staging["id"] => "https://orders.staging.example.com" })
 
 package = mgmt.api_packages.create(name: "Orders read")
-endpoint = mgmt.endpoints.each(application_id: orders["id"]).find { |e| e["path"] == "/orders" && e["action"] == "GET" }
-mgmt.api_packages.add_endpoint(package["id"], application_id: orders["id"], endpoint_id: endpoint["id"],
-                                              environment_id: staging["id"])
 
-# Invite a client; what it should get is assigned as soon as it accepts.
-client = mgmt.clients.invite(
+# An application's endpoints are listed once its runtime SDK has reported them, so a just-created
+# application has none yet. Publish one endpoint when it is there, else the whole application
+# (endpoint_id nil covers every endpoint, including ones reported later).
+endpoint = mgmt.endpoints.each(application_id: orders["id"]).find { |e| e["path"] == "/orders" && e["action"] == "GET" }
+mgmt.api_packages.add_endpoint(package["id"], application_id: orders["id"], endpoint_id: endpoint&.fetch("id"),
+                                              environment_id: staging["id"])
+```
+
+Then give a client the package in one of two ways; doing both for the same package and environment
+is refused with `already_assigned`.
+
+```ruby
+# Either: set it up on the invite, and it is assigned the moment the client accepts.
+globex = mgmt.clients.invite(
   name: "Globex",
   contacts: [{ email: "dev@globex.example", first_name: "Hank", last_name: "Scorpio" }],
   packages: [{ api_package_id: package["id"], environment_id: staging["id"] }]
 )
-client["invite_code"]  # send this to the client; it accepts from its own EndPointBlank organization
+globex["invite_code"]  # send this to the client; it accepts from its own EndPointBlank organization
 
-# Or assign to a client later (pending until it accepts):
-mgmt.package_assignments.assign(client["id"], api_package_id: package["id"], environment_id: staging["id"])
-mgmt.grants.create(client["id"], target_application_id: orders["id"], environment_id: staging["id"])
+# Or: invite first, then assign (pending until the client accepts, active after) and grant directly.
+initrode = mgmt.clients.invite(name: "Initrode")
+mgmt.package_assignments.assign(initrode["id"], api_package_id: package["id"], environment_id: staging["id"])
+mgmt.grants.create(initrode["id"], target_application_id: orders["id"], environment_id: staging["id"])
 ```
 
 ### Runtime credentials
@@ -644,13 +656,16 @@ under `/api/v1/clients/:client_id/`:
 customer = mgmt.clients.create_managed(name: "Initech")
 initech  = mgmt.for_managed_client(customer["id"])
 
-production = initech.environments.create(name: "production", domain: "initech.example")
+# The managed client's organization already has a "production" environment (the name is
+# reserved); create others alongside it.
+initech_staging = initech.environments.create(name: "staging", domain: "staging.initech.example")
+billing_url = "https://billing.staging.initech.example"
 app = initech.applications.create(name: "Initech billing",
-                                  environment_base_urls: { production["id"] => "https://billing.initech.example" })
+                                  environment_base_urls: { initech_staging["id"] => billing_url })
 app_env = initech.applications.list_environments(app["id"]).first
 secret = initech.credentials.create(application_environment_id: app_env["id"])["client_secret"]
 
-# Grant it your APIs like any accepted client ...
+# Grant it your APIs like any accepted client (package and staging from the example above) ...
 mgmt.package_assignments.assign(customer["id"], api_package_id: package["id"], environment_id: staging["id"])
 
 # ... and hand it over: the customer gets an email, and claiming rotates every credential you issued.
