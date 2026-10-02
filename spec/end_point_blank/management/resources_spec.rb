@@ -300,5 +300,27 @@ RSpec.describe EndPointBlank::Management::Client, :management_api do
       expect { client.for_managed_client("") }.to raise_error(ArgumentError)
       expect(management_requests).to be_empty
     end
+
+    it "refuses an id of dots only, which a proxy or normalizer could resolve to another route" do
+      stub_management_api
+
+      [".", "..", "..."].each do |dots|
+        expect { client.clients.get(dots) }.to raise_error(ArgumentError, /dots/)
+        expect { client.grants.delete("c1", dots) }.to raise_error(ArgumentError, /dots/)
+        expect { client.grants.delete(dots, "g1") }.to raise_error(ArgumentError, /dots/)
+        expect { client.api_packages.remove_endpoint(pkg, dots) }.to raise_error(ArgumentError, /dots/)
+        expect { client.for_managed_client(dots) }.to raise_error(ArgumentError, /dots/)
+      end
+      expect { client.for_managed_client("..").credentials.delete("x") }.to raise_error(ArgumentError)
+      expect(management_requests).to be_empty
+    end
+
+    it "still accepts an id that merely contains dots" do
+      stub_management_api
+
+      client.clients.get("a..b")
+
+      expect(management_requests.last.path).to eq("/api/v1/clients/a..b")
+    end
   end
 end

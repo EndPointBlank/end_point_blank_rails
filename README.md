@@ -556,8 +556,9 @@ Rack-compatible server or framework, not only Sinatra.
 `EndPointBlank::Management::Client` manages your organization's EndPointBlank setup from code:
 API packages, clients and their invites, package assignments, direct grants, applications,
 environments, runtime credentials, and the managed clients you run for your customers. It calls
-app_portal's management API (`https://app.endpointblank.com/api/v1`; reference at
-<https://endpointblank.com/docs/management-api>).
+app_portal's management API (`https://app.endpointblank.com/api/v1`). See the
+[guide](https://app.endpointblank.com/docs/management-api) and the
+[reference](https://app.endpointblank.com/docs/management-api-reference).
 
 It is plain Ruby, usable from a script, a job or a console as well as a Rails app, and it is
 **separate from the runtime configuration above**. It authenticates only with a management API
@@ -691,7 +692,8 @@ The SDK raises three codes of its own: `connection_error` (no answer at all; `st
   twice. A credential `create` or `rotate` retried after the first one succeeded raises
   `idempotency_replay_unavailable` instead of replaying the secret: read or list the credential
   (rotate it if you never got the secret).
-- **Retries.** A 429 `rate_limited` is retried after its `Retry-After` seconds. A 5xx
+- **Retries.** A 429 `rate_limited` is retried after its `Retry-After` seconds (1 second
+  when it has none). A 5xx
   (`internal_server_error`, `audit_unavailable`, `intake_unavailable`) or a request that got no
   answer is retried with backoff for GET, DELETE and POST, never for PATCH.
   `idempotency_request_in_progress` is retried shortly with the same key. 4xx refusals are never

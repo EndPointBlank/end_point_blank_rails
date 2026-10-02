@@ -26,10 +26,15 @@ module EndPointBlank
         end
 
         # One path segment, percent-escaped. An empty id is refused, so it can
-        # never turn a "get one" into a "list all".
+        # never turn a "get one" into a "list all"; so is an id of dots only
+        # (".", ".."), a dot-segment that any proxy or URL normalizer may
+        # resolve into a different route (DELETE /clients/c1/grants/.. into
+        # DELETE /clients/c1). Percent-encoding the dots would not help:
+        # normalizers decode %2E first. Real ids are UUIDs.
         def self.escape(segment)
           value = segment.to_s
           raise ArgumentError, "an id must be a non-empty String" if value.empty?
+          raise ArgumentError, "an id must not be only dots" if value.each_char.all?(".")
 
           value.b.gsub(/[^A-Za-z0-9\-._~]/n) { |char| format("%%%02X", char.ord) }
         end

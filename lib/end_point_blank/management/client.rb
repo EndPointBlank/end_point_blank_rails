@@ -32,8 +32,10 @@ module EndPointBlank
     # Thread-safe: each request opens its own connection.
     class Client
       KEY_PREFIX = "epb_mk_"
-      # The prefix and at least one more character, with no whitespace.
-      KEY_FORMAT = /\Aepb_mk_\S+\z/.freeze
+      # The prefix and the rest of the key in the alphabet app_portal mints it
+      # in (URL-safe base64): nothing else can be a valid key, so nothing else
+      # is ever put in a header.
+      KEY_FORMAT = /\Aepb_mk_[A-Za-z0-9_-]+\z/.freeze
 
       # The options {#initialize} takes besides api_key and base_url.
       OPTIONS = %i[max_retries max_retry_wait connect_timeout read_timeout sleeper excon_options].freeze
@@ -113,21 +115,32 @@ module EndPointBlank
       # The key, if it is a management API key. The error never repeats it.
       # @api private
       def self.validate_key(api_key)
-        return api_key if api_key.is_a?(String) && api_key.match?(KEY_FORMAT)
+        key = normalized_key(api_key)
+        return key if key&.match?(KEY_FORMAT)
 
-        given = api_key.nil? || api_key == "" ? "No key was given" : "The key given does not have that form"
+        given = key.nil? || key.empty? ? "No key was given" : "The key given does not have that form"
         raise EndPointBlank::ConfigurationError,
               "EndPointBlank::Management::Client needs a management API key: #{KEY_PREFIX} followed by " \
               "the rest of the key, as the portal shows it under Settings > API Keys. #{given}. " \
               "Runtime client credentials are not accepted by the management API."
       end
 
+      # +api_key+ without surrounding whitespace (a key read from a file or an
+      # env var often ends in a newline), or nil when it is not a readable
+      # String at all.
+      def self.normalized_key(api_key)
+        return nil unless api_key.is_a?(String) && api_key.valid_encoding? && api_key.encoding.ascii_compatible?
+
+        api_key.strip
+      end
+      private_class_method :normalized_key
+
       # +base_url+ without a trailing slash, if it is an http(s) URL with a
       # host and no userinfo, query or fragment. The error never repeats it,
       # since a URL can carry credentials.
       # @api private
       def self.validate_base_url(base_url)
-        return base_url.to_s.sub(%r{/+\z}, "") if plain_http_url?(base_url)
+        return UrlPath.strip_trailing_slashes(base_url.to_s) if plain_http_url?(base_url)
 
         raise EndPointBlank::ConfigurationError,
               "The management API base_url must be an http(s) URL with a host and no userinfo, " \

@@ -7,6 +7,7 @@ require_relative "management/error"
 require_relative "management/page"
 require_relative "management/retry_policy"
 require_relative "management/idempotency_key"
+require_relative "management/url_path"
 require_relative "management/transport"
 require_relative "management/client"
 

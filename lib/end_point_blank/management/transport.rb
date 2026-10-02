@@ -7,6 +7,7 @@ require_relative "../version"
 require_relative "error"
 require_relative "retry_policy"
 require_relative "idempotency_key"
+require_relative "url_path"
 
 module EndPointBlank
   module Management
@@ -42,7 +43,7 @@ module EndPointBlank
                      sleeper:, excon_options: {})
         @api_key = api_key
         @base_url = base_url
-        @base_path = URI.parse(base_url).path.sub(%r{/+\z}, "")
+        @base_path = UrlPath.strip_trailing_slashes(URI.parse(base_url).path)
         @retry_policy = RetryPolicy.new(max_retries: max_retries, max_retry_wait: max_retry_wait)
         @connect_timeout = connect_timeout
         @read_timeout = read_timeout

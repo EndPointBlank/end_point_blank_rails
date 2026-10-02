@@ -26,6 +26,27 @@ RSpec.describe EndPointBlank::Management::Client, :management_api do
       expect { described_class.new(api_key: "epb_mk_a b") }.to raise_error(EndPointBlank::ConfigurationError)
     end
 
+    it "refuses a key with a byte app_portal never mints, without a request and without repeating it" do
+      stub_management_api
+      ["epb_mk_a\x00b", "epb_mk_a\x01b", "epb_mk_a\x7Fb", "epb_mk_a\u00e9b", "epb_mk_a\rb", "epb_mk_a\nb",
+       "epb_mk_a:b", "epb_mk_a+b/c=", "epb_mk_a\xFFb".b, "epb_mk_ab".encode("UTF-16LE")].each do |key|
+        expect { described_class.new(api_key: key) }
+          .to raise_error(EndPointBlank::ConfigurationError) { |error|
+            expect(error.message).not_to include(key.b)
+            expect(error.full_message).not_to include(key.b)
+            expect(error.message).not_to include(key.inspect)
+          }
+      end
+      expect(management_requests).to be_empty
+    end
+
+    it "accepts a key in app_portal's alphabet, and strips surrounding whitespace" do
+      stub_management_api
+      management_client(api_key: "  epb_mk_Ab9-_x\n").organization
+
+      expect(management_requests.last.header("Authorization")).to eq("Bearer epb_mk_Ab9-_x")
+    end
+
     it "defaults to https://app.endpointblank.com" do
       expect(described_class.new(api_key: ManagementApiStub::KEY).base_url).to eq("https://app.endpointblank.com")
     end
@@ -40,6 +61,20 @@ RSpec.describe EndPointBlank::Management::Client, :management_api do
     it "refuses unknown options and negative retries" do
       expect { management_client(retries: 1) }.to raise_error(ArgumentError, /retries/)
       expect { management_client(max_retries: -1) }.to raise_error(ArgumentError, /max_retries/)
+    end
+
+    it "strips any run of trailing slashes from the base URL, in linear time" do
+      stub_management_api
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      mgmt = management_client(base_url: "https://portal.example.test/prefix#{"/" * 200_000}")
+      elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - started
+
+      expect(mgmt.base_url).to eq("https://portal.example.test/prefix")
+      expect(elapsed).to be < 1
+      mgmt.organization
+      expect(management_requests.last.path).to eq("/prefix/api/v1/organization")
+      expect(EndPointBlank::Management::UrlPath.strip_trailing_slashes("///")).to eq("")
+      expect(EndPointBlank::Management::UrlPath.strip_trailing_slashes("/a/b")).to eq("/a/b")
     end
 
     it "keeps the base URL's path prefix" do
@@ -245,6 +280,14 @@ RSpec.describe EndPointBlank::Management::Client, :management_api do
 
       expect(client.organization).to eq("id" => "org")
       expect(sleeps).to eq([7])
+    end
+
+    it "waits 1 second on a 429 without Retry-After" do
+      stub_management_api({ status: 429, body: "Too Many Requests" }, status: 200, body: { data: {} })
+
+      client.organization
+
+      expect(sleeps).to eq([1])
     end
 
     it "retries a 429 on PATCH too: nothing was done" do

@@ -15,6 +15,9 @@ module EndPointBlank
 
       # Wait before retrying a 409 in progress that has no Retry-After header.
       IN_PROGRESS_WAIT = 1
+      # Wait before retrying a 429 that has no Retry-After header (app_portal
+      # always sends one; a proxy's 429 may not).
+      RATE_LIMITED_WAIT = 1
       # First backoff for a 5xx or a request with no answer; doubles per attempt.
       BACKOFF_BASE = 0.5
 
@@ -38,7 +41,7 @@ module EndPointBlank
       private
 
       def wanted_wait(method, error, attempt)
-        return error.retry_after || BACKOFF_BASE if error.status == 429
+        return error.retry_after || RATE_LIMITED_WAIT if error.status == 429
         return in_progress_wait(method, error) if error.code?(ErrorCodes::IDEMPOTENCY_REQUEST_IN_PROGRESS)
         return nil unless server_side_failure?(error) && RETRYABLE_METHODS.include?(method)
 
