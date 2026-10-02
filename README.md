@@ -16,6 +16,9 @@ auto-loads (railtie + middleware) when Rails is present.
 - **Client-side data masking** (`EndPointBlank::Masking` / `masking_rules`) — strip or redact
   sensitive fields from payloads *before* they leave your process, as defense in depth on top of
   server-side masking.
+- **Management API client** (`EndPointBlank::Management::Client`) — manage API packages, clients,
+  grants, applications, environments, credentials and managed clients from code. See
+  [Management API](#management-api).
 - **Framework-agnostic core** — `EndPointBlank::Middleware::Rack::ReportInteraction` and the
   writers work directly against Rack env/`::Rack::Request`, so the gem behaves correctly under
   plain Ruby, Sinatra, or any Rack app. When `::Rails` is defined, a `Railtie` auto-inserts the
@@ -547,6 +550,174 @@ The middleware calls `EndPointBlank::Rack::EnvStore.set(env)`, reports the reque
 and clears the env store, reporting any raised exception via `ExceptionWriter` along the way. It
 reads/writes plain Rack request objects (`::Rack::Request`), so it works identically under any
 Rack-compatible server or framework, not only Sinatra.
+
+## Management API
+
+`EndPointBlank::Management::Client` manages your organization's EndPointBlank setup from code:
+API packages, clients and their invites, package assignments, direct grants, applications,
+environments, runtime credentials, and the managed clients you run for your customers. It calls
+app_portal's management API (`https://app.endpointblank.com/api/v1`; reference at
+<https://endpointblank.com/docs/management-api>).
+
+It is plain Ruby, usable from a script, a job or a console as well as a Rails app, and it is
+**separate from the runtime configuration above**. It authenticates only with a management API
+key (create one in the portal under Settings > API Keys), sent as
+`Authorization: Bearer epb_mk_...`. It never sends your runtime `client_id`/`client_secret`, never
+calls intake, and never shows the key in `inspect`, `to_s` or an error message. A key without the
+`epb_mk_` prefix is refused when the client is built, with `EndPointBlank::ConfigurationError`.
+
+### Quick start
+
+```ruby
+require "end_point_blank"
+
+mgmt = EndPointBlank::Management::Client.new(api_key: ENV.fetch("EPB_MGMT_KEY"))
+
+mgmt.organization  # => {"id" => "...", "name" => "Acme", "slug" => "acme", "key" => {"name" => "ci", "scope" => "write"}, ...}
+
+# One page at a time (limit 1..100, default 50) ...
+page = mgmt.applications.list(limit: 20)
+page.data         # => [{"id" => "...", "name" => "Orders", ...}, ...]
+page.next_cursor  # => pass as `after:` for the next page; nil on the last one
+
+# ... or every item, fetching pages as it goes (an Enumerator without a block).
+mgmt.applications.each { |application| puts application["name"] }
+names = mgmt.api_packages.each(limit: 100).map { |package| package["name"] }
+```
+
+Every call answers what the API sent, decoded from JSON into Hashes with String keys: the
+resource itself (the response's `data`), a `Page` for a list, and `{"id" => ..., "deleted" => true}`
+for a delete. `api_packages.add_endpoint` and `remove_endpoint` answer the whole body,
+`{"data" => ..., "warnings" => [...]}`, so the `assignment_derives_nothing` warnings are not lost.
+Optional keyword arguments left `nil` are not sent.
+
+### Invite a client and assign an API package
+
+```ruby
+staging = mgmt.environments.create(name: "staging", domain: "staging.example.com")
+orders  = mgmt.applications.create(name: "Orders",
+                                   environment_base_urls: { staging["id"] => "https://orders.staging.example.com" })
+
+package = mgmt.api_packages.create(name: "Orders read")
+endpoint = mgmt.endpoints.each(application_id: orders["id"]).find { |e| e["path"] == "/orders" && e["action"] == "GET" }
+mgmt.api_packages.add_endpoint(package["id"], application_id: orders["id"], endpoint_id: endpoint["id"],
+                                              environment_id: staging["id"])
+
+# Invite a client; what it should get is assigned as soon as it accepts.
+client = mgmt.clients.invite(
+  name: "Globex",
+  contacts: [{ email: "dev@globex.example", first_name: "Hank", last_name: "Scorpio" }],
+  packages: [{ api_package_id: package["id"], environment_id: staging["id"] }]
+)
+client["invite_code"]  # send this to the client; it accepts from its own EndPointBlank organization
+
+# Or assign to a client later (pending until it accepts):
+mgmt.package_assignments.assign(client["id"], api_package_id: package["id"], environment_id: staging["id"])
+mgmt.grants.create(client["id"], target_application_id: orders["id"], environment_id: staging["id"])
+```
+
+### Runtime credentials
+
+```ruby
+app_env = mgmt.applications.list_environments(orders["id"]).first
+credential = mgmt.credentials.create(application_environment_id: app_env["id"])
+credential["client_id"]
+credential["client_secret"]  # shown once, here and nowhere else: store it now
+
+rotated = mgmt.credentials.rotate(credential["id"])
+rotated["client_secret"]     # the new secret; the old one keeps working for the grace window
+
+mgmt.credentials.revoke(credential["id"])
+```
+
+`list` and `get` answer metadata only (`secret_last_4`, never the secret). This SDK never logs a
+secret, the key, or any request or response body.
+
+### Managed clients
+
+A managed client is an organization you create and run for a customer until they claim it.
+`for_managed_client(id)` gives the same applications, environments and credentials calls, sent
+under `/api/v1/clients/:client_id/`:
+
+```ruby
+customer = mgmt.clients.create_managed(name: "Initech")
+initech  = mgmt.for_managed_client(customer["id"])
+
+production = initech.environments.create(name: "production", domain: "initech.example")
+app = initech.applications.create(name: "Initech billing",
+                                  environment_base_urls: { production["id"] => "https://billing.initech.example" })
+app_env = initech.applications.list_environments(app["id"]).first
+secret = initech.credentials.create(application_environment_id: app_env["id"])["client_secret"]
+
+# Grant it your APIs like any accepted client ...
+mgmt.package_assignments.assign(customer["id"], api_package_id: package["id"], environment_id: staging["id"])
+
+# ... and hand it over: the customer gets an email, and claiming rotates every credential you issued.
+initech.claim_invite(email: "it@initech.example")
+```
+
+Once claimed, the managed client's calls answer `not_found`. Remove an unclaimed one with
+`mgmt.clients.delete(customer["id"])` after revoking its credentials.
+
+### Errors, retries and idempotency
+
+Every refusal raises `EndPointBlank::Management::Error` (a subclass of `EndPointBlank::Error`)
+with `code`, `message`, `details`, `status`, `retry_after`, `location` and `request_id`. Match on
+`code`, which is stable; `message` is for people. `EndPointBlank::Management::ErrorCodes` has a
+constant for every code the API documents, and an unknown code still raises with that code.
+
+```ruby
+codes = EndPointBlank::Management::ErrorCodes
+
+begin
+  mgmt.clients.invite(name: "Umbrella")
+rescue EndPointBlank::Management::Error => e
+  case e.code
+  when codes::PLAN_LIMIT        then warn "upgrade your plan to add clients"            # 402
+  when codes::VALIDATION_FAILED then warn "invalid fields: #{e.details.inspect}"        # 422
+  when codes::NOT_FOUND         then warn "no such resource"                            # 404
+  when codes::INSUFFICIENT_SCOPE then warn "this is a read-only key"                    # 403
+  else raise
+  end
+end
+```
+
+The SDK raises three codes of its own: `connection_error` (no answer at all; `status` is nil),
+`http_error` (an error answer that is not the API's JSON, e.g. from a proxy) and
+`invalid_response` (a success answer that is not JSON).
+
+- **Idempotency.** Every POST sends an `Idempotency-Key`: a random UUID unless you pass
+  `idempotency_key:` (1 to 255 characters), and a retry sends the same key, so a POST is never run
+  twice. A credential `create` or `rotate` retried after the first one succeeded raises
+  `idempotency_replay_unavailable` instead of replaying the secret: read or list the credential
+  (rotate it if you never got the secret).
+- **Retries.** A 429 `rate_limited` is retried after its `Retry-After` seconds. A 5xx
+  (`internal_server_error`, `audit_unavailable`, `intake_unavailable`) or a request that got no
+  answer is retried with backoff for GET, DELETE and POST, never for PATCH.
+  `idempotency_request_in_progress` is retried shortly with the same key. 4xx refusals are never
+  retried.
+
+| `Client.new` option | Env var fallback | Default | Notes |
+|---|---|---|---|
+| `api_key` | `ENDPOINTBLANK_MANAGEMENT_KEY` | none (required) | A management API key, `epb_mk_...`. |
+| `base_url` | `ENDPOINTBLANK_MANAGEMENT_BASE_URL` | `https://app.endpointblank.com` | app_portal, not intake. |
+| `max_retries` | — | `2` | Retries after the first attempt; `0` turns them off. |
+| `max_retry_wait` | — | `60` | The longest single wait, in seconds; a longer `Retry-After` raises instead. |
+| `connect_timeout` / `read_timeout` | — | `5` / `30` | Seconds. |
+| `sleeper` | — | `Kernel#sleep` | Called with the seconds before each retry (replace it in tests). |
+| `excon_options` | — | `{}` | Extra `Excon.new` options, e.g. a proxy. |
+
+In a Rails app, set the defaults once in an initializer, apart from `EndPointBlank.configure`:
+
+```ruby
+# config/initializers/end_point_blank_management.rb
+EndPointBlank::Management.configure do |m|
+  m.api_key = Rails.application.credentials.dig(:end_point_blank, :management_key)
+  m.max_retries = 3
+end
+
+EndPointBlank::Management.client.organization  # a Client built from that configuration
+```
 
 ## Development
 

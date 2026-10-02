@@ -36,6 +36,7 @@ require_relative "end_point_blank/rack/headers"
 require_relative "end_point_blank/unauthorized_error"
 require_relative "end_point_blank/token_unavailable_error"
 require_relative "end_point_blank/configuration_error"
+require_relative "end_point_blank/management"
 if defined?(::Rails)
   require_relative "end_point_blank/rails/authenticated"
   require_relative "end_point_blank/rails/authorized"
