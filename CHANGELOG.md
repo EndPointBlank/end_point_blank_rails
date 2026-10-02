@@ -1,5 +1,50 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **A client for the organization management API (sc-1505).**
+  `EndPointBlank::Management::Client` calls app_portal's `/api/v1` so a
+  provider can manage its EndPointBlank setup from code instead of
+  hand-rolling HTTP calls: the organization (`organization`), API packages
+  and what they publish (`api_packages`, `endpoints`), clients and their
+  invites (`clients`, including `invite` with pre-assigned `packages` and
+  `grants`, and `create_managed`), package assignments
+  (`package_assignments`), direct grants (`grants`), `applications` and their
+  environments, `environments`, and runtime `credentials` (create and
+  `rotate` return the one-time `client_secret`). `for_managed_client(id)`
+  gives the same applications, environments and credentials calls for a
+  managed client, under `/clients/:client_id/`, plus `claim_invite`.
+
+  It is plain Ruby (no Rails needed) and separate from the runtime
+  configuration: it authenticates only with a management API key, sent as
+  `Authorization: Bearer epb_mk_...`, refuses at construction a key without
+  that prefix, never sends the runtime `client_id`/`client_secret`, never
+  calls intake, and never shows the key in `inspect`, `to_s` or an error
+  message. Defaults come from `EndPointBlank::Management.configure` (e.g. a
+  Rails initializer) or `ENDPOINTBLANK_MANAGEMENT_KEY` /
+  `ENDPOINTBLANK_MANAGEMENT_BASE_URL`, and the base URL defaults to
+  `https://app.endpointblank.com`.
+
+  - Lists answer an `EndPointBlank::Management::Page` (`data`,
+    `next_cursor`); each list's `each` walks every page lazily, as an
+    `Enumerator` without a block.
+  - Every POST sends an `Idempotency-Key` (a random UUID v4 unless you pass
+    `idempotency_key:`), and a retry sends the same one.
+  - A 429 is retried after its `Retry-After` seconds (1 second without
+    one); a 5xx or a request that got no answer is retried with backoff for
+    GET, DELETE and POST, never for PATCH; `idempotency_request_in_progress` is retried with the
+    same key. At most 2 retries by default (`max_retries:`, `0` turns them
+    off), and no single wait longer than `max_retry_wait:` (60 seconds).
+  - Every refusal raises `EndPointBlank::Management::Error` (a subclass of
+    `EndPointBlank::Error`) with `code`, `message`, `details`, `status`,
+    `retry_after`, `location` and `request_id`. `ErrorCodes` lists every
+    code the API documents; a code it does not know still raises with that
+    code. `idempotency_replay_unavailable` is never retried, and its message
+    says to read or list the resource instead.
+  - Uses Excon, already a dependency; no new runtime dependency.
+
 ## 0.12.0
 
 ### Breaking changes
