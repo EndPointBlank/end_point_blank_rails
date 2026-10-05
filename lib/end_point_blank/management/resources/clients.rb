@@ -70,9 +70,17 @@ module EndPointBlank
 
         # POST /clients/:client_id/claim_invites: emails your customer an
         # invite to claim a managed client.
+        #
+        # +return_to+ (optional, sent only when given) is where EndPointBlank
+        # sends the customer's browser once they have claimed it. It must
+        # equal, byte for byte, a claim return URL your organization
+        # registered in EndPointBlank, or the call is refused with
+        # +return_to_not_registered+ (422).
         # @return [Hash] <tt>{"client_id", "email", "sent_at", "expires_at"}</tt>
-        def claim_invite(client_id, email:, idempotency_key: nil)
-          post_data(path("clients", client_id, "claim_invites"), { email: email }, idempotency_key)
+        def claim_invite(client_id, email:, return_to: nil, idempotency_key: nil)
+          body = { email: email }
+          body[:return_to] = return_to unless return_to.nil?
+          post_data(path("clients", client_id, "claim_invites"), body, idempotency_key)
         end
       end
 

@@ -479,9 +479,10 @@ RSpec.describe EndPointBlank::Management::Client, :management_api do
 
   describe EndPointBlank::Management::ErrorCodes do
     it "lists every code the API documents, with its status" do
-      expect(described_class::ALL.size).to eq(44)
+      expect(described_class::ALL.size).to eq(45)
       expect(described_class::STATUSES).to include("plan_limit" => 402, "rate_limited" => 429,
-                                                   "not_found" => 404, "idempotency_replay_unavailable" => 409)
+                                                   "not_found" => 404, "idempotency_replay_unavailable" => 409,
+                                                   "return_to_not_registered" => 422)
       expect(described_class::ALL).not_to include("unsupported_media_type", "request_entity_too_large")
     end
   end
