@@ -670,6 +670,11 @@ mgmt.package_assignments.assign(customer["id"], api_package_id: package["id"], e
 
 # ... and hand it over: the customer gets an email, and claiming rotates every credential you issued.
 initech.claim_invite(email: "it@initech.example")
+
+# Optionally send the customer's browser somewhere once they have claimed it. `return_to` must
+# equal, byte for byte, a claim return URL your organization registered in EndPointBlank;
+# anything else is refused with `return_to_not_registered` (422).
+initech.claim_invite(email: "it@initech.example", return_to: "https://app.example/welcome")
 ```
 
 Once claimed, the managed client's calls answer `not_found`. Remove an unclaimed one with

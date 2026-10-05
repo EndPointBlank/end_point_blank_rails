@@ -66,6 +66,9 @@ module EndPointBlank
       ENVIRONMENT_NOT_IN_APPLICATION = "environment_not_in_application"
       ALREADY_GRANTED = "already_granted"
       GRANT_REVOKED_CONCURRENTLY = "grant_revoked_concurrently"
+      # A claim invite's +return_to+ is not one of the claim return URLs your
+      # organization registered.
+      RETURN_TO_NOT_REGISTERED = "return_to_not_registered"
 
       # The warning code API package endpoint writes answer in +warnings+ (not
       # an error): a client assignment of the package now derives no grant.
@@ -97,7 +100,7 @@ module EndPointBlank
         ALREADY_A_MEMBER => 422, MANAGED_CLIENT_HAS_CREDENTIALS => 422, API_PACKAGE_NOT_FOUND => 422,
         ENVIRONMENT_NOT_FOUND => 422, ALREADY_ASSIGNED => 422, NOTHING_PUBLISHED_IN_ENVIRONMENT => 422,
         APPLICATION_NOT_FOUND => 422, ENDPOINT_NOT_FOUND => 422, ENVIRONMENT_NOT_IN_APPLICATION => 422,
-        ALREADY_GRANTED => 422, GRANT_REVOKED_CONCURRENTLY => 409
+        ALREADY_GRANTED => 422, GRANT_REVOKED_CONCURRENTLY => 409, RETURN_TO_NOT_REGISTERED => 422
       }.freeze
 
       # Every code the API can send, as strings.

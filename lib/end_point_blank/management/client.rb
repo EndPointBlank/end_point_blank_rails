@@ -215,9 +215,11 @@ module EndPointBlank
       end
 
       # POST /clients/:client_id/claim_invites: emails your customer an
-      # invite to claim the client. @return [Hash]
-      def claim_invite(email:, idempotency_key: nil)
-        @clients.claim_invite(client_id, email: email, idempotency_key: idempotency_key)
+      # invite to claim the client, and with +return_to+ (a claim return URL
+      # your organization registered) where to send them once claimed; see
+      # {Resources::Clients#claim_invite}. @return [Hash]
+      def claim_invite(email:, return_to: nil, idempotency_key: nil)
+        @clients.claim_invite(client_id, email: email, return_to: return_to, idempotency_key: idempotency_key)
       end
 
       def inspect

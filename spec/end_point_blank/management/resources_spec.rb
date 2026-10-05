@@ -103,6 +103,10 @@ RSpec.describe EndPointBlank::Management::Client, :management_api do
          body: { "email" => "owner@acme.test" }) do |c|
       c.clients.claim_invite(cid, email: "owner@acme.test")
     end
+    call("claim_invite with return_to", "POST", -> { "/api/v1/clients/#{cid}/claim_invites" },
+         body: { "email" => "owner@acme.test", "return_to" => "https://app.acme.test/welcome" }) do |c|
+      c.clients.claim_invite(cid, email: "owner@acme.test", return_to: "https://app.acme.test/welcome")
+    end
   end
 
   describe "package_assignments" do
@@ -249,6 +253,10 @@ RSpec.describe EndPointBlank::Management::Client, :management_api do
     call("claim_invite", "POST", -> { "/api/v1/clients/#{cid}/claim_invites" },
          body: { "email" => "owner@acme.test" }) do |_c|
       managed.claim_invite(email: "owner@acme.test")
+    end
+    call("claim_invite with return_to", "POST", -> { "/api/v1/clients/#{cid}/claim_invites" },
+         body: { "email" => "owner@acme.test", "return_to" => "https://app.acme.test/welcome" }) do |_c|
+      managed.claim_invite(email: "owner@acme.test", return_to: "https://app.acme.test/welcome")
     end
     call("get", "GET", -> { "/api/v1/clients/#{cid}" }) { |_c| managed.get }
   end
