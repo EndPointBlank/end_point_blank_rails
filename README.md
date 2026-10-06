@@ -487,9 +487,8 @@ match; `$$` for a literal `$`). Stacktraces and log messages/data are never mask
 
 **Credential and cookie headers are never sent.** Before any rule runs, the request and response
 records leave out `Authorization`, `Proxy-Authorization`, `Cookie` and `Set-Cookie`, whatever
-their letter case. They are left out of the record, not masked, so no rule or `mask_hook` is
-needed for them and none can bring them back. The list is
-`EndPointBlank::Rack::Headers::SENSITIVE_HEADERS`.
+their letter case. They are left out of the record, not masked: they are not in the payload the
+rules and hook receive. The list is `EndPointBlank::Rack::Headers::SENSITIVE_HEADERS`.
 
 ## Framework integration
 

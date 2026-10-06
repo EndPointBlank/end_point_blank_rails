@@ -5,20 +5,24 @@
 ### Security
 
 - **Request and response records no longer carry credentials or cookies
-  (sc-1470).** Both records carried every `HTTP_*` header of the request
-  (the response record sends the request's headers, not the response's), so
-  unless you had written a masking rule for it, a caller's `Authorization`
-  header (Basic `client_id:secret` or a bearer token) landed in your request
-  and response logs in EndPointBlank. `RequestWriter` and `ResponseWriter`
-  now leave out `Authorization`, `Proxy-Authorization`, `Cookie` and
-  `Set-Cookie`, in any letter case, before masking runs: they are not sent
-  at all. The list is `EndPointBlank::Rack::Headers::SENSITIVE_HEADERS`; the
-  SDK's own reads of the request (`Headers.extract`, used to find the
-  endpoint version) are unchanged. A masking rule that targeted one of these
-  headers now has nothing to match and can be removed. Records sent by
-  earlier versions may hold these values; rotate any client secret a caller
-  sent while it was in use.
+  (sc-1470).** Both records carried every `HTTP_*` header of the request (the
+  response record sends the request's headers, not the response's), so unless
+  you had written a masking rule for it, a caller's `Authorization` header
+  (Basic `client_id:secret` or a bearer token) landed in your request and
+  response logs in EndPointBlank. `RequestWriter` and `ResponseWriter` now
+  leave out `Authorization`, `Proxy-Authorization`, `Cookie` and `Set-Cookie`,
+  in any letter case, before masking runs, so they are not in the payload the
+  rules and hook receive, and they are not sent at all. The list is
+  `EndPointBlank::Rack::Headers::SENSITIVE_HEADERS`; the SDK's own reads of
+  the request (`Headers.extract`, used to find the endpoint version) are
+  unchanged. A masking rule that targeted one of these headers now has nothing
+  to match and can be removed. Records sent by earlier versions may hold these
+  values; rotate any client secret a caller sent while it was in use.
 
+### Upgrading
+
+- A `mask_hook` that reads `Authorization`, `Proxy-Authorization`, `Cookie` or
+  `Set-Cookie` from `headers` now finds it absent; guard the lookup.
 
 ### Added
 
