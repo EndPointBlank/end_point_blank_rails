@@ -25,7 +25,9 @@ module EndPointBlank
         env = ::EndPointBlank::Rack::EnvStore.get
         request = ::Rack::Request.new(env)
         version = Commands::VersionFinder.new.find(request)
-        headers = ::EndPointBlank::Rack::Headers.extract
+        # Authorization, Proxy-Authorization and Cookie are never sent,
+        # masking rule or not (Headers::SENSITIVE_HEADERS, sc-1470).
+        headers = ::EndPointBlank::Rack::Headers.reportable
 
         {
           app_name: EndPointBlank::Configuration.instance.app_name,

@@ -24,7 +24,10 @@ module EndPointBlank
       def payload(status:, headers:, body:, data: {})
         request = ::EndPointBlank::Rack::EnvStore.request
         env = ::EndPointBlank::Rack::EnvStore.get
-        headers = ::EndPointBlank::Rack::Headers.extract
+        # The record carries the request's headers, not the `headers:`
+        # argument, so without the sc-1470 filter a caller's Authorization
+        # and Cookie reached the response record too.
+        headers = ::EndPointBlank::Rack::Headers.reportable
         version = request ? Commands::VersionFinder.new.find(request) : nil
         route = request ? Commands::RoutePatternFinder.find(request) : nil
 

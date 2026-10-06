@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    end_point_blank (0.13.0)
+    end_point_blank (0.13.1)
       base64
       excon (~> 1.0)
       rack (>= 3.2.6)
