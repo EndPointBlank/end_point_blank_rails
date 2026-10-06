@@ -485,6 +485,11 @@ regex is applied only within the path-selected node(s). When a `regex` is presen
 match; `$$` for a literal `$`). Stacktraces and log messages/data are never masked (there is no
 `log` entry in the masking field map).
 
+**Credential and cookie headers are never sent.** Before any rule runs, the request and response
+records leave out `Authorization`, `Proxy-Authorization`, `Cookie` and `Set-Cookie`, whatever
+their letter case. They are left out of the record, not masked: they are not in the payload the
+rules and hook receive. The list is `EndPointBlank::Rack::Headers::SENSITIVE_HEADERS`.
+
 ## Framework integration
 
 ### Rails
