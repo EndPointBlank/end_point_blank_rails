@@ -687,8 +687,8 @@ initech.claim_invite(email: "it@initech.example", return_to: "https://app.exampl
 # when they click and redirect their browser to it. The link works once and expires after 60
 # seconds, so never render it into a page, and mint a new one (with a new Idempotency-Key, the
 # default) on every click. `return_url:` (optional) must be one of your claim return URLs too.
-session = initech.create_portal_session(return_url: "https://app.example/welcome")
-redirect_to session["url"], allow_other_host: true
+portal = initech.create_portal_session(return_url: "https://app.example/welcome")
+redirect_to portal["url"], allow_other_host: true
 ```
 
 Once claimed, the managed client's calls answer `not_found`. Remove an unclaimed one with
