@@ -125,7 +125,8 @@ module EndPointBlank
                      "that is shown only once, so it can't be replayed and was not retried. Read or list " \
                      "the resource to see its current state"
           message << " (#{location})" if location
-          message << ". If you need a secret you never received, rotate the credential."
+          message << ". If you need a secret you never received, rotate the credential; for a portal " \
+                     "session, create a new one with a new key."
           message
         end
       end

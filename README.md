@@ -658,7 +658,9 @@ A managed client is an organization you create and run for a customer until they
 under `/api/v1/clients/:client_id/`:
 
 ```ruby
-customer = mgmt.clients.create_managed(name: "Initech")
+# `owner_email` (optional) names the person at your customer who will own it; change it later
+# with `mgmt.clients.update(customer["id"], owner_email: ...)`.
+customer = mgmt.clients.create_managed(name: "Initech", owner_email: "it@initech.example")
 initech  = mgmt.for_managed_client(customer["id"])
 
 # The managed client's organization already has a "production" environment (the name is
@@ -680,6 +682,13 @@ initech.claim_invite(email: "it@initech.example")
 # equal, byte for byte, a claim return URL your organization registered in EndPointBlank;
 # anything else is refused with `return_to_not_registered` (422).
 initech.claim_invite(email: "it@initech.example", return_to: "https://app.example/welcome")
+
+# Until they claim it, send its owner into its EndPointBlank portal from your app: mint a link
+# when they click and redirect their browser to it. The link works once and expires after 60
+# seconds, so never render it into a page, and mint a new one (with a new Idempotency-Key, the
+# default) on every click. `return_url:` (optional) must be one of your claim return URLs too.
+portal = initech.create_portal_session(return_url: "https://app.example/welcome")
+redirect_to portal["url"], allow_other_host: true
 ```
 
 Once claimed, the managed client's calls answer `not_found`. Remove an unclaimed one with

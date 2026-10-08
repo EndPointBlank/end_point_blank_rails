@@ -22,6 +22,7 @@ module EndPointBlank
     class EnvStore
       KEY = 'end_point_blank.rack_env'.freeze
       SOURCE_ENV_ID_KEY = 'end_point_blank.source_application_environment_id'.freeze
+      SOURCE_ORGANIZATION_ID_KEY = 'end_point_blank.source_organization_id'.freeze
       DEPRECATION_KEY = 'end_point_blank.deprecation'.freeze
 
       def self.set(env)
@@ -45,6 +46,18 @@ module EndPointBlank
 
       def self.source_application_environment_id
         fetch(SOURCE_ENV_ID_KEY)
+      end
+
+      # The calling organization's EndPointBlank id, from intake's authorize
+      # answer (data[0].source_organization_id, sc-1571), resolved beside the
+      # source application environment id. nil when intake is older than that
+      # field or the organization has no id there.
+      def self.set_source_organization_id(id)
+        put(SOURCE_ORGANIZATION_ID_KEY, id)
+      end
+
+      def self.source_organization_id
+        fetch(SOURCE_ORGANIZATION_ID_KEY)
       end
 
       # The authorize response's deprecation block, stashed on the way in so the

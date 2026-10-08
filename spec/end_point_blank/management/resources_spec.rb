@@ -98,6 +98,18 @@ RSpec.describe EndPointBlank::Management::Client, :management_api do
          body: { "name" => "Acme", "managed" => false }) do |c|
       c.clients.create(name: "Acme", managed: false)
     end
+    call("create_managed with owner_email", "POST", -> { "/api/v1/clients" },
+         body: { "name" => "Run for Acme", "managed" => true, "owner_email" => "owner@acme.test" }) do |c|
+      c.clients.create_managed(name: "Run for Acme", owner_email: "owner@acme.test")
+    end
+    call("create with managed: true and owner_email", "POST", -> { "/api/v1/clients" },
+         body: { "name" => "Acme", "managed" => true, "owner_email" => "owner@acme.test" }) do |c|
+      c.clients.create(name: "Acme", managed: true, owner_email: "owner@acme.test")
+    end
+    call("update", "PATCH", -> { "/api/v1/clients/#{cid}" },
+         body: { "owner_email" => "new-owner@acme.test" }) do |c|
+      c.clients.update(cid, owner_email: "new-owner@acme.test")
+    end
     call("delete", "DELETE", -> { "/api/v1/clients/#{cid}" }) { |c| c.clients.delete(cid) }
     call("claim_invite", "POST", -> { "/api/v1/clients/#{cid}/claim_invites" },
          body: { "email" => "owner@acme.test" }) do |c|
@@ -106,6 +118,17 @@ RSpec.describe EndPointBlank::Management::Client, :management_api do
     call("claim_invite with return_to", "POST", -> { "/api/v1/clients/#{cid}/claim_invites" },
          body: { "email" => "owner@acme.test", "return_to" => "https://app.acme.test/welcome" }) do |c|
       c.clients.claim_invite(cid, email: "owner@acme.test", return_to: "https://app.acme.test/welcome")
+    end
+    call("create_portal_session", "POST", -> { "/api/v1/clients/#{cid}/portal_sessions" }) do |c|
+      c.clients.create_portal_session(cid)
+    end
+    call("create_portal_session with return_url", "POST", -> { "/api/v1/clients/#{cid}/portal_sessions" },
+         body: { "return_url" => "https://app.acme.test/portal/done" }) do |c|
+      c.clients.create_portal_session(cid, return_url: "https://app.acme.test/portal/done")
+    end
+    call("create_portal_session with a nil return_url", "POST",
+         -> { "/api/v1/clients/#{cid}/portal_sessions" }) do |c|
+      c.clients.create_portal_session(cid, return_url: nil)
     end
   end
 
@@ -257,6 +280,13 @@ RSpec.describe EndPointBlank::Management::Client, :management_api do
     call("claim_invite with return_to", "POST", -> { "/api/v1/clients/#{cid}/claim_invites" },
          body: { "email" => "owner@acme.test", "return_to" => "https://app.acme.test/welcome" }) do |_c|
       managed.claim_invite(email: "owner@acme.test", return_to: "https://app.acme.test/welcome")
+    end
+    call("create_portal_session", "POST", -> { "/api/v1/clients/#{cid}/portal_sessions" }) do |_c|
+      managed.create_portal_session
+    end
+    call("create_portal_session with return_url", "POST", -> { "/api/v1/clients/#{cid}/portal_sessions" },
+         body: { "return_url" => "https://app.acme.test/portal/done" }) do |_c|
+      managed.create_portal_session(return_url: "https://app.acme.test/portal/done")
     end
     call("get", "GET", -> { "/api/v1/clients/#{cid}" }) { |_c| managed.get }
   end

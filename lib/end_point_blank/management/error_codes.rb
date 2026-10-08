@@ -56,6 +56,13 @@ module EndPointBlank
       CLIENT_ACCEPTED = "client_accepted"
       CLIENT_NOT_MANAGED = "client_not_managed"
       ALREADY_A_MEMBER = "already_a_member"
+      ALREADY_INVITED = "already_invited"
+      INVITE_ACCEPTED = "invite_accepted"
+      INVITE_NOT_OPEN = "invite_not_open"
+      INVITE_RATE_LIMITED = "invite_rate_limited"
+      NOT_AN_EMAIL_INVITE = "not_an_email_invite"
+      CLIENT_BEING_REMOVED = "client_being_removed"
+      CLIENT_NOT_REMOVABLE = "client_not_removable"
       MANAGED_CLIENT_HAS_CREDENTIALS = "managed_client_has_credentials"
       API_PACKAGE_NOT_FOUND = "api_package_not_found"
       ENVIRONMENT_NOT_FOUND = "environment_not_found"
@@ -69,6 +76,11 @@ module EndPointBlank
       # A claim invite's +return_to+ is not one of the claim return URLs your
       # organization registered.
       RETURN_TO_NOT_REGISTERED = "return_to_not_registered"
+      # A portal session's +return_url+ is not one of those claim return URLs.
+      RETURN_URL_NOT_REGISTERED = "return_url_not_registered"
+      # A portal session for a managed client with no owner email; set one
+      # with <tt>clients.update</tt>.
+      OWNER_EMAIL_MISSING = "owner_email_missing"
 
       # The warning code API package endpoint writes answer in +warnings+ (not
       # an error): a client assignment of the package now derives no grant.
@@ -97,10 +109,13 @@ module EndPointBlank
         DELETE_REFUSED => 422, INTAKE_CREDENTIAL => 409, INTAKE_REJECTED => 422, INTAKE_UNAVAILABLE => 503,
         INVALID_CONTACTS => 422, INVALID_PACKAGES => 422, INVALID_GRANTS => 422, INVALID_MANAGED => 422,
         CLIENT_NOT_ACCEPTED => 422, CLIENT_ACCEPTED => 422, CLIENT_NOT_MANAGED => 422,
-        ALREADY_A_MEMBER => 422, MANAGED_CLIENT_HAS_CREDENTIALS => 422, API_PACKAGE_NOT_FOUND => 422,
+        ALREADY_A_MEMBER => 422, ALREADY_INVITED => 409, INVITE_ACCEPTED => 422, INVITE_NOT_OPEN => 422,
+        INVITE_RATE_LIMITED => 429, NOT_AN_EMAIL_INVITE => 422, CLIENT_BEING_REMOVED => 422,
+        CLIENT_NOT_REMOVABLE => 422, MANAGED_CLIENT_HAS_CREDENTIALS => 422, API_PACKAGE_NOT_FOUND => 422,
         ENVIRONMENT_NOT_FOUND => 422, ALREADY_ASSIGNED => 422, NOTHING_PUBLISHED_IN_ENVIRONMENT => 422,
         APPLICATION_NOT_FOUND => 422, ENDPOINT_NOT_FOUND => 422, ENVIRONMENT_NOT_IN_APPLICATION => 422,
-        ALREADY_GRANTED => 422, GRANT_REVOKED_CONCURRENTLY => 409, RETURN_TO_NOT_REGISTERED => 422
+        ALREADY_GRANTED => 422, GRANT_REVOKED_CONCURRENTLY => 409, RETURN_TO_NOT_REGISTERED => 422,
+        RETURN_URL_NOT_REGISTERED => 422, OWNER_EMAIL_MISSING => 422
       }.freeze
 
       # Every code the API can send, as strings.

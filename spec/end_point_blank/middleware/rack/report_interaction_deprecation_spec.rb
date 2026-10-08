@@ -117,6 +117,31 @@ RSpec.describe EndPointBlank::Middleware::Rack::ReportInteraction do
       expect(headers).not_to have_key("Deprecation")
     end
 
+    # sc-1571: nor can the caller's ids. A request arriving on this thread
+    # starts with neither, before anything (the request record included)
+    # reads them.
+    it "starts a request with no source environment or organization id" do
+      EndPointBlank::Rack::EnvStore.set(::Rack::MockRequest.env_for("/stale"))
+      EndPointBlank::Rack::EnvStore.set_source_application_environment_id("app-env-stale")
+      EndPointBlank::Rack::EnvStore.set_source_organization_id("org-stale")
+
+      seen = nil
+      allow(EndPointBlank::Writers::RequestWriter).to receive(:write) do
+        seen = [EndPointBlank::Rack::EnvStore.source_application_environment_id,
+                EndPointBlank::Rack::EnvStore.source_organization_id]
+      end
+      inside = nil
+      app = lambda do |_e|
+        inside = [EndPointBlank::Rack::EnvStore.source_application_environment_id,
+                  EndPointBlank::Rack::EnvStore.source_organization_id]
+        [200, {}, ["{}"]]
+      end
+      described_class.new(app).call(::Rack::MockRequest.env_for("/fresh"))
+
+      expect(seen).to eq([nil, nil])
+      expect(inside).to eq([nil, nil])
+    end
+
     it "is a no-op outside a Rack request rather than an error" do
       EndPointBlank::Rack::EnvStore.clear
 

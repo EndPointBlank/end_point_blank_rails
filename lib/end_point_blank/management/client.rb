@@ -222,6 +222,14 @@ module EndPointBlank
         @clients.claim_invite(client_id, email: email, return_to: return_to, idempotency_key: idempotency_key)
       end
 
+      # POST /clients/:client_id/portal_sessions: a single-use, 60-second
+      # link that signs the client's owner in to its EndPointBlank portal
+      # until they claim it; see {Resources::Clients#create_portal_session}.
+      # @return [Hash]
+      def create_portal_session(return_url: nil, idempotency_key: nil)
+        @clients.create_portal_session(client_id, return_url: return_url, idempotency_key: idempotency_key)
+      end
+
       def inspect
         "#<#{self.class.name} client_id=#{client_id.inspect}>"
       end

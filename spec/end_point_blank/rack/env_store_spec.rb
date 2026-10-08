@@ -12,13 +12,18 @@ RSpec.describe EndPointBlank::Rack::EnvStore do
 
   after { described_class.clear }
 
-  # Both values behave identically, so the same isolation properties are
+  # The values behave identically, so the same isolation properties are
   # asserted for each rather than trusted to generalise from one.
   {
     "source_application_environment_id" => {
       set: :set_source_application_environment_id,
       get: :source_application_environment_id,
       value: "app-env-123"
+    },
+    "source_organization_id" => {
+      set: :set_source_organization_id,
+      get: :source_organization_id,
+      value: "org-123"
     },
     "deprecation" => {
       set: :set_deprecation,
@@ -71,13 +76,14 @@ RSpec.describe EndPointBlank::Rack::EnvStore do
     end
   end
 
-  describe "the two values together" do
+  describe "the values together" do
     it "are independent" do
       described_class.set(env)
       described_class.set_source_application_environment_id("app-env-123")
 
       expect(described_class.deprecation).to be_nil
       expect(described_class.source_application_environment_id).to eq("app-env-123")
+      expect(described_class.source_organization_id).to be_nil
     end
   end
 
