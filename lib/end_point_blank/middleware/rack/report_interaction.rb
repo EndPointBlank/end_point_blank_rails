@@ -14,6 +14,10 @@ module EndPointBlank
         end
 
         def call(env)
+          # Start from nothing: installing this request's own env replaces the
+          # store wholesale, so an earlier request on this thread whose ensure
+          # never ran cannot lend its caller (source environment and
+          # organization ids, deprecation) to this one.
           ::EndPointBlank::Rack::EnvStore.set(env)
           ::EndPointBlank::Writers::RequestWriter.write
 

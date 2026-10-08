@@ -165,6 +165,104 @@ RSpec.describe EndPointBlank::Commands::EndpointAuthorize do
     end
   end
 
+  # sc-1571: intake names the calling organization by its EndPointBlank id,
+  # beside the source environment id, under data[0].
+  describe "the calling organization" do
+    def granted(organization)
+      access = { "source_application_environment_id" => "app-env-1" }
+      access["source_organization_id"] = organization unless organization == :absent
+      http_response(201, JSON.generate(data: [access]))
+    end
+
+    def authorize_in_request
+      request = request_double
+      EndPointBlank::Rack::EnvStore.set(request.env)
+      described_class.authorize(request)
+    end
+
+    it "is recorded beside the source environment id" do
+      authorize_queue.replace([granted("org-42")])
+
+      authorize_in_request
+
+      expect(EndPointBlank::Rack::EnvStore.source_organization_id).to eq("org-42")
+      expect(EndPointBlank::Rack::EnvStore.source_application_environment_id).to eq("app-env-1")
+    end
+
+    # An older intake is not a broken contract, so nothing is logged: the
+    # error log is kept for the env id, whose absence is one.
+    it "is nil, quietly, when intake is older than the field" do
+      authorize_queue.replace([granted(:absent)])
+
+      authorize_in_request
+
+      expect(EndPointBlank::Rack::EnvStore.source_organization_id).to be_nil
+      expect(EndPointBlank::Rack::EnvStore.source_application_environment_id).to eq("app-env-1")
+      expect(logger).not_to have_received(:error)
+    end
+
+    it "is nil when intake answers null for an organization with no id" do
+      authorize_queue.replace([granted(nil)])
+
+      authorize_in_request
+
+      expect(EndPointBlank::Rack::EnvStore.source_organization_id).to be_nil
+      expect(logger).not_to have_received(:error)
+    end
+
+    # A value left by an earlier request on this env must not survive a
+    # refused or failed authorization and name the wrong caller.
+    [
+      ["refused", -> { http_response(403, JSON.generate(error: "forbidden")) }],
+      ["unreachable", -> { Excon::Error::Timeout.new("timed out") }]
+    ].each do |name, answer|
+      it "is not recorded, and neither is the environment, when the authorization is #{name}" do
+        allow(EndPointBlank::Commands::Http).to receive(:sleep)
+        authorize_queue.replace([instance_exec(&answer)])
+        request = request_double
+        EndPointBlank::Rack::EnvStore.set(request.env)
+        EndPointBlank::Rack::EnvStore.set_source_application_environment_id("app-env-stale")
+        EndPointBlank::Rack::EnvStore.set_source_organization_id("org-stale")
+
+        described_class.authorize(request)
+
+        expect(EndPointBlank::Rack::EnvStore.source_organization_id).to be_nil
+        expect(EndPointBlank::Rack::EnvStore.source_application_environment_id).to be_nil
+      end
+    end
+
+    # Cached per client and route like the deprecation, so an organization
+    # carried only on the miss would be there on roughly one request in N.
+    it "is recorded on a cache hit too" do
+      authorize_queue.replace([granted("org-cached")])
+      authorize_in_request
+      # A fresh env for the second request, so the id can only come from the
+      # cache hit itself.
+      authorize_in_request
+
+      expect(authorize_calls.size).to eq(1)
+      expect(EndPointBlank::Rack::EnvStore.source_organization_id).to eq("org-cached")
+    end
+
+    # A body cached by 0.13.x has no source_organization_id. It still
+    # authorizes, with its env id and no organization, rather than keeping
+    # whatever an earlier caller left behind.
+    it "is nil for a body cached before intake sent it, which still authorizes" do
+      authorize_queue.replace([granted(:absent)])
+      authorize_in_request
+
+      request = request_double
+      EndPointBlank::Rack::EnvStore.set(request.env)
+      EndPointBlank::Rack::EnvStore.set_source_organization_id("org-stale")
+      result = described_class.authorize(request)
+
+      expect(authorize_calls.size).to eq(1)
+      expect(result.status).to eq(201)
+      expect(EndPointBlank::Rack::EnvStore.source_application_environment_id).to eq("app-env-1")
+      expect(EndPointBlank::Rack::EnvStore.source_organization_id).to be_nil
+    end
+  end
+
   describe "caching an authorization" do
     it "does not ask intake again for an identical request" do
       described_class.authorize(request_double)

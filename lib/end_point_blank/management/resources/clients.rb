@@ -40,11 +40,16 @@ module EndPointBlank
         #   target_endpoint_id: nil}</tt>
         # @param managed [Boolean, nil] true creates a managed client (no
         #   packages or grants with it; assign those afterwards)
+        # @param owner_email [String, nil] with <tt>managed: true</tt>, the
+        #   email address of the person at your customer who will own the
+        #   managed client; change it later with {#update}
         # @return [Hash] the new client; +invite_code+ is what the client
         #   accepts with
         # rubocop:disable Metrics/ParameterLists
-        def create(name:, contacts: nil, packages: nil, grants: nil, managed: nil, idempotency_key: nil)
-          body = compact(name: name, contacts: contacts, packages: packages, grants: grants, managed: managed)
+        def create(name:, contacts: nil, packages: nil, grants: nil, managed: nil, owner_email: nil,
+                   idempotency_key: nil)
+          body = compact(name: name, contacts: contacts, packages: packages, grants: grants, managed: managed,
+                         owner_email: owner_email)
           post_data(path("clients"), body, idempotency_key)
         end
         # rubocop:enable Metrics/ParameterLists
@@ -57,8 +62,15 @@ module EndPointBlank
 
         # Creates a managed client: {#create} with <tt>managed: true</tt>. Set
         # it up with {Client#for_managed_client}.
-        def create_managed(name:, contacts: nil, idempotency_key: nil)
-          create(name: name, contacts: contacts, managed: true, idempotency_key: idempotency_key)
+        def create_managed(name:, contacts: nil, owner_email: nil, idempotency_key: nil)
+          create(name: name, contacts: contacts, managed: true, owner_email: owner_email,
+                 idempotency_key: idempotency_key)
+        end
+
+        # PATCH /clients/:id: +owner_email+ is the email address of the
+        # person at your customer who will own a managed client. @return [Hash]
+        def update(id, owner_email:)
+          patch_data(path("clients", id), { owner_email: owner_email })
         end
 
         # DELETE /clients/:id. Refused with +managed_client_has_credentials+
@@ -81,6 +93,34 @@ module EndPointBlank
           body = { email: email }
           body[:return_to] = return_to unless return_to.nil?
           post_data(path("clients", client_id, "claim_invites"), body, idempotency_key)
+        end
+
+        # POST /clients/:client_id/portal_sessions: mints a single-use link
+        # that signs the owner of managed client +client_id+ in to its
+        # EndPointBlank portal.
+        #
+        # The link expires 60 seconds after it is minted and works once, so
+        # mint it when the user clicks and redirect their browser to it; never
+        # render it into a page, log it or send it in an email. +return_url+
+        # (optional, sent only when given) is where the portal links back to,
+        # and must equal, byte for byte, a claim return URL your organization
+        # registered.
+        #
+        # Each call sends a new Idempotency-Key unless you pass one, and that
+        # is what you want: the answer is never replayed, so a key used before
+        # is refused with +idempotency_replay_unavailable+ (409). Never reuse a
+        # key across clicks.
+        #
+        # Refused with +not_found+ (404) for a client that is not yours, and
+        # with +client_not_managed+ (not a managed client, or already
+        # claimed), +client_being_removed+, +owner_email_missing+ (set one with
+        # {#update}) or +return_url_not_registered+ (an empty string included),
+        # all 422.
+        # @return [Hash] <tt>{"client_id", "url", "expires_at", "return_url"}</tt>,
+        #   +return_url+ nil when none was given
+        def create_portal_session(client_id, return_url: nil, idempotency_key: nil)
+          body = return_url.nil? ? nil : { return_url: return_url }
+          post_data(path("clients", client_id, "portal_sessions"), body, idempotency_key)
         end
       end
 

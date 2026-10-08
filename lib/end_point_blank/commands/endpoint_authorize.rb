@@ -16,6 +16,12 @@ module EndPointBlank
         end
 
         def authorize(request)
+          # A thread that serves more than one request, or a direct caller
+          # that reuses one env, must not carry the last caller's identity
+          # into this one: a refused or failed authorization leaves both ids
+          # unset rather than naming whoever was authorized before.
+          record_source(nil, nil)
+
           client_auth = request.headers['Authorization'].to_s
           method      = request.request_method
           path        = request.route_uri_pattern.to_s.gsub(/\([^)]*\)/, '')
@@ -33,14 +39,16 @@ module EndPointBlank
           # The cached value is the authorize response body, not a truthy
           # marker.
           #
-          # It has to be, for two reasons. Callers parse the body — a cache hit
+          # It has to be, for three reasons. Callers parse the body — a cache hit
           # returning '' made JSON.parse raise, so a cached authorization became
           # a 500 rather than a fast success. And the body is where the
           # deprecation block lives; without it the Deprecation and Sunset
           # headers would appear only on cache misses, which reads as a flaky
-          # feature rather than a missing one.
+          # feature rather than a missing one. And the calling organization's
+          # id (sc-1571) is in it too, for the same reason. A body cached
+          # before intake sent that id simply has none, and answers nil.
           if (cached = cache.retrieve(cache_key))
-            record_source_application_environment_id(cached)
+            record_source_ids(cached)
             return CachedResponse.new(201, cached)
           end
 
@@ -70,7 +78,7 @@ module EndPointBlank
           return nil if response.nil?
           EndPointBlank.logger.info "Authentication response: #{response.status} - #{response.body}"
           if response.status == 201
-            record_source_application_environment_id(response.body)
+            record_source_ids(response.body)
             cache.store(cache_key, response.body)
           elsif response.status > 299
             EndPointBlank.logger.error "Failed to authorize endpoint: #{response.status} - #{response.body}"
@@ -79,6 +87,33 @@ module EndPointBlank
         end
 
         private
+
+        def record_source(source_env_id, source_organization_id)
+          ::EndPointBlank::Rack::EnvStore.set_source_application_environment_id(source_env_id)
+          ::EndPointBlank::Rack::EnvStore.set_source_organization_id(source_organization_id)
+        end
+
+        def record_source_ids(body)
+          record_source_application_environment_id(body)
+          ::EndPointBlank::Rack::EnvStore.set_source_organization_id(source_organization_id(body))
+        end
+
+        # sc-1571: the calling organization's EndPointBlank id. An intake older
+        # than the field does not send it, and an organization with no id
+        # there gets null; both are nil here, silently, since neither is a
+        # broken contract. A body that is not a JSON object has already been
+        # logged by record_source_application_environment_id.
+        def source_organization_id(body)
+          parsed = JSON.parse(body)
+          return nil unless parsed.is_a?(Hash)
+
+          data = parsed['data']
+          first = data.is_a?(Array) ? data.first : nil
+          id = first.is_a?(Hash) ? first['source_organization_id'] : nil
+          id.is_a?(String) && !id.empty? ? id : nil
+        rescue JSON::ParserError
+          nil
+        end
 
         # Intake renders the grant under data[0]. The Rails controller also
         # records this value, but the command is also used directly (today,

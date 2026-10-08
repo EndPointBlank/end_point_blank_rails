@@ -265,6 +265,19 @@ RSpec.describe EndPointBlank::Management::Client, :management_api do
       expect(management_requests.size).to eq(1)
     end
 
+    it "says to create a new portal session when its key is reused, keeping the credential advice" do
+      stub_management_api(api_error(409, "idempotency_replay_unavailable", "server text"))
+
+      expect { client.clients.create_portal_session("c1", idempotency_key: "k1") }
+        .to raise_error(EndPointBlank::Management::Error) { |error|
+          expect(error.code).to eq(codes::IDEMPOTENCY_REPLAY_UNAVAILABLE)
+          expect(error.status).to eq(409)
+          expect(error.message).to include("rotate the credential", "portal session, create a new one with a new key")
+          expect(error.message).not_to include("server text")
+        }
+      expect(management_requests.size).to eq(1)
+    end
+
     it "refuses an Idempotency-Key on anything but a POST, and an empty or overlong one" do
       transport = client.instance_variable_get(:@transport)
       expect { transport.request("GET", "/organization", idempotency_key: "k") }.to raise_error(ArgumentError)
@@ -338,6 +351,21 @@ RSpec.describe EndPointBlank::Management::Client, :management_api do
       client.environments.get("env-1")
       expect(management_requests.size).to eq(3)
       expect(sleeps).to eq([0.5, 0.5, 1.0])
+    end
+
+    it "never retries a 5xx or a lost connection on a client update, a PATCH" do
+      stub_management_api(api_error(503, "audit_unavailable"), status: 200, body: { data: {} })
+      expect { client.clients.update("c1", owner_email: "owner@acme.test") }
+        .to raise_error(EndPointBlank::Management::Error) { |error| expect(error.code).to eq("audit_unavailable") }
+      expect(management_requests.size).to eq(1)
+
+      Excon.stubs.clear
+      management_requests.clear
+      stub_management_api(raise: Excon::Error::Socket.new(StandardError.new("connection refused")))
+      expect { client.clients.update("c1", owner_email: "owner@acme.test") }
+        .to raise_error(EndPointBlank::Management::Error) { |error| expect(error.code).to eq(codes::CONNECTION_ERROR) }
+      expect(management_requests.size).to eq(1)
+      expect(management_requests.first.header("Idempotency-Key")).to be_nil
     end
 
     it "never retries a 5xx on PATCH" do
@@ -477,12 +505,67 @@ RSpec.describe EndPointBlank::Management::Client, :management_api do
     end
   end
 
+  # sc-1574: a single-use, 60-second link into a managed client's portal.
+  describe "portal sessions" do
+    let(:session) do
+      { "client_id" => "c1", "url" => "https://portal.test/managed/sessions/abc",
+        "expires_at" => "2026-10-07T12:01:00Z", "return_url" => nil }
+    end
+
+    it "answers the API's data" do
+      stub_management_api(status: 201, body: { data: session })
+
+      expect(client.clients.create_portal_session("c1")).to eq(session)
+      expect(client.for_managed_client("c1").create_portal_session).to eq(session)
+    end
+
+    it "sends no body, and no Content-Type, without a return_url" do
+      stub_management_api(status: 201, body: { data: session })
+
+      client.clients.create_portal_session("c1")
+
+      expect(management_requests.last.body).to be_nil
+      expect(management_requests.last.header("Content-Type")).to be_nil
+    end
+
+    # The answer is never replayed, so every click needs a key of its own.
+    it "sends a new Idempotency-Key on every call" do
+      stub_management_api(status: 201, body: { data: session })
+
+      client.clients.create_portal_session("c1")
+      client.clients.create_portal_session("c1")
+
+      first, second = management_requests.map { |request| request.header("Idempotency-Key") }
+      expect(first).to match(/\A\h{8}-\h{4}-4\h{3}-[89ab]\h{3}-\h{12}\z/)
+      expect(second).to match(/\A\h{8}-\h{4}-4\h{3}-[89ab]\h{3}-\h{12}\z/)
+      expect(second).not_to eq(first)
+    end
+
+    it "raises the refusal" do
+      stub_management_api(api_error(422, "owner_email_missing"))
+
+      expect { client.clients.create_portal_session("c1") }
+        .to raise_error(EndPointBlank::Management::Error) { |error|
+          expect(error.code).to eq(codes::OWNER_EMAIL_MISSING)
+          expect(error.status).to eq(422)
+        }
+    end
+  end
+
   describe EndPointBlank::Management::ErrorCodes do
     it "lists every code the API documents, with its status" do
-      expect(described_class::ALL.size).to eq(45)
+      expect(described_class::ALL.size).to eq(54)
       expect(described_class::STATUSES).to include("plan_limit" => 402, "rate_limited" => 429,
                                                    "not_found" => 404, "idempotency_replay_unavailable" => 409,
                                                    "return_to_not_registered" => 422)
+    end
+
+    it "lists a portal session's refusals, the invite codes and client_not_removable (sc-1574)" do
+      expect(described_class::STATUSES).to include(
+        "client_being_removed" => 422, "owner_email_missing" => 422, "return_url_not_registered" => 422,
+        "already_invited" => 409, "invite_accepted" => 422, "invite_not_open" => 422,
+        "invite_rate_limited" => 429, "not_an_email_invite" => 422, "client_not_removable" => 422
+      )
       expect(described_class::ALL).not_to include("unsupported_media_type", "request_entity_too_large")
     end
   end

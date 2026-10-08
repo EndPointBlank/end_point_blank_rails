@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.14.0
+
+### Added
+
+- **Managed clients carry an `owner_email` (sc-1567).** `clients.create`
+  (with `managed: true`) and `clients.create_managed` take `owner_email:`,
+  the person at your customer who will own the managed client, and the new
+  `clients.update(id, owner_email:)` (`PATCH /api/v1/clients/:id`) changes
+  it. Like every PATCH, the update sends no Idempotency-Key and is never
+  retried after a 5xx or a lost connection.
+- **The calling organization's id is kept from `/authorize` (sc-1571).**
+  `EndPointBlank::Rack::EnvStore.source_organization_id` answers
+  `data[0].source_organization_id`, the caller's EndPointBlank organization
+  id, beside `source_application_environment_id`, on a cache miss and on a
+  cache hit alike (the cache holds intake's whole answer). nil, without a log
+  line, when intake is older than the field or the organization has no id. An
+  answer cached before intake sent the field still authorizes, with no
+  organization, until its entry expires (`cache_ttl`).
+- **`create_portal_session` signs a managed client's owner in to its
+  EndPointBlank portal (sc-1574).** `clients.create_portal_session(client_id,
+  return_url: nil)` and a managed client's `create_portal_session(return_url:
+  nil)` call `POST /api/v1/clients/:client_id/portal_sessions` and answer
+  `{"client_id", "url", "expires_at", "return_url"}`: a single-use link that
+  expires 60 seconds after it is minted, so mint it when the user clicks and
+  redirect their browser to it. `return_url` is sent only when given and must
+  equal one of your organization's claim return URLs. Refused with 404 for a
+  client that is not yours, and 422 (`client_not_managed`,
+  `client_being_removed`, `owner_email_missing`, `return_url_not_registered`)
+  for one that is not an unclaimed managed client open to claims with an
+  owner email. The answer is never replayed: each call sends a new
+  Idempotency-Key, and a reused one answers 409
+  `idempotency_replay_unavailable`, whose message now also says to create a
+  new portal session with a new key.
+- `ErrorCodes` lists the API codes it was missing: `already_invited` (409),
+  `invite_accepted`, `invite_not_open`, `invite_rate_limited` (429),
+  `not_an_email_invite`, `client_being_removed`, `client_not_removable`,
+  `return_url_not_registered` and `owner_email_missing`.
+
+### Fixed
+
+- **A failed authorization no longer leaves an earlier caller in the request
+  store.** `EndpointAuthorize.authorize` clears the source environment and
+  organization ids before it asks, so a refused or unanswered authorization on
+  a reused env (a direct caller of the command) cannot name the previous
+  caller. The Rack middleware already starts every request from an empty
+  store, by installing that request's own env.
+
 ## 0.13.1
 
 ### Security
