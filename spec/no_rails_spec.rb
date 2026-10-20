@@ -71,16 +71,17 @@ RSpec.describe "EndPointBlank core without ::Rails" do
     end
 
     it "runs a full request/response cycle without raising any Rails-related error" do
-      app = ->(_env) { [200, {}, ["ok"]] }
+      app = ->(_env) { [200, { "content-type" => "text/plain" }, ["ok"]] }
       middleware = EndPointBlank::Middleware::Rack::ReportInteraction.new(app)
 
       result = nil
       expect { result = middleware.call(env) }.not_to raise_error
 
-      expect(result).to eq([200, {}, ["ok"]])
+      expect(result).to eq([200, { "content-type" => "text/plain" }, ["ok"]])
       expect(EndPointBlank::Writers::RequestWriter).to have_received(:write)
+      # The response's headers, not the request's Accept (sc-1627).
       expect(EndPointBlank::Writers::ResponseWriter)
-        .to have_received(:write).with(status: 200, headers: { "Accept" => "application/json" }, body: ["ok"])
+        .to have_received(:write).with(status: 200, headers: { "content-type" => "text/plain" }, body: ["ok"])
     end
 
     it "reports and re-raises a downstream exception without a Rails-related error" do
@@ -92,7 +93,7 @@ RSpec.describe "EndPointBlank core without ::Rails" do
 
       expect(EndPointBlank::Writers::ExceptionWriter).to have_received(:write).with(boom)
       expect(EndPointBlank::Writers::ResponseWriter).to have_received(:write).with(
-        status: 500, headers: { "Accept" => "application/json" }, body: "RuntimeError: kaboom"
+        status: 500, headers: {}, body: "RuntimeError: kaboom"
       )
     end
   end

@@ -24,10 +24,10 @@ module EndPointBlank
       def payload(status:, headers:, body:, data: {})
         request = ::EndPointBlank::Rack::EnvStore.request
         env = ::EndPointBlank::Rack::EnvStore.get
-        # The record carries the request's headers, not the `headers:`
-        # argument, so without the sc-1470 filter a caller's Authorization
-        # and Cookie reached the response record too.
-        headers = ::EndPointBlank::Rack::Headers.reportable
+        # The response's own headers (sc-1627). This used to send the
+        # request's headers instead, so the response log showed the caller's
+        # headers and any credential header reached intake a second time.
+        headers = ::EndPointBlank::Rack::Headers.reportable_response(headers)
         version = request ? Commands::VersionFinder.new.find(request) : nil
         route = request ? Commands::RoutePatternFinder.find(request) : nil
 
