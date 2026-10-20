@@ -11,7 +11,7 @@ Gem::Specification.new do |spec|
   spec.summary = "Ruby and Rails SDK for EndPointBlank: authorize service-to-service API calls, report endpoint versions, and see which clients still call deprecated API versions."
   spec.description = "Ruby and Rails SDK for EndPointBlank: authorize service-to-service (machine-to-machine) API calls, report endpoint versions, and see which clients still call deprecated API versions before you sunset them. A framework-agnostic core runs in plain Ruby / Sinatra, with Rails supported as an auto-loaded adapter."
   spec.homepage = "https://endpointblank.com"
-  spec.required_ruby_version = ">= 3.4.2"
+  spec.required_ruby_version = ">= 3.3"
   spec.license = "Nonstandard"
 
   spec.metadata["allowed_push_host"] = "https://rubygems.org"

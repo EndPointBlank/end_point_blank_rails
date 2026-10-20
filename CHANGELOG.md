@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- **The gem loads on Ruby 3.3 (sc-1628).** `LogWriter#payload` defaulted each
+  keyword to itself (`message: message`), which Ruby 3.3 rejects with
+  "circular argument reference" (a SyntaxError), so requiring the gem failed.
+  The keywords are now plain required keywords. `required_ruby_version` is
+  lowered from `>= 3.4.2` to `>= 3.3`, and CI runs the suite on 3.3 and 3.4.2.
 - **The response record carries the response's headers (sc-1627).**
   `ReportInteraction` sent the request's headers in the response record, so
   intake's response log showed request headers and any credential header not
