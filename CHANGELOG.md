@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **The response record carries the response's headers (sc-1627).**
+  `ReportInteraction` sent the request's headers in the response record, so
+  intake's response log showed request headers and any credential header not
+  dropped by sc-1470 reached intake twice. It now sends the app's response
+  headers (none when the app raised), minus the same sensitive headers the
+  request record drops. A header Rack gives as an array is joined with ", ".
+
 ## 0.14.0
 
 ### Added

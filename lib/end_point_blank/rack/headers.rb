@@ -27,6 +27,19 @@ module EndPointBlank
         without_sensitive(extract)
       end
 
+      # A response's own headers as a response record may send them
+      # (sc-1627): a plain hash of name to string, without any of
+      # {SENSITIVE_HEADERS}. Accepts a Hash or a Rack::Headers; a header Rack 3
+      # gives as an array of values is joined with ", ". nil is {}.
+      def self.reportable_response(headers)
+        return {} if headers.nil?
+
+        plain = headers.to_h.to_h do |name, value|
+          [name.to_s, value.is_a?(Array) ? value.join(", ") : value.to_s]
+        end
+        without_sensitive(plain)
+      end
+
       # A new hash of `headers` without any of {SENSITIVE_HEADERS}, whatever
       # their letter case. Never changes its argument; nil is {}.
       def self.without_sensitive(headers)

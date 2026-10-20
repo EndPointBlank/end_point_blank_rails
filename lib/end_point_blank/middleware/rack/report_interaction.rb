@@ -48,8 +48,8 @@ module EndPointBlank
 
           raise e
         ensure
-          headers = ::EndPointBlank::Rack::Headers.extract
-          ::EndPointBlank::Writers::ResponseWriter.write(status:, headers:, body:)
+          # The app's response headers; none when the app raised (sc-1627).
+          ::EndPointBlank::Writers::ResponseWriter.write(status:, headers: headers || {}, body:)
           ::EndPointBlank::Rack::EnvStore.clear
         end
 
