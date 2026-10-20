@@ -43,9 +43,15 @@ RSpec.describe "Headers the writers never send" do
   end
 
   it "leaves them out of the response record" do
-    payload = EndPointBlank::Writers::ResponseWriter.instance.payload(status: 200, headers: {}, body: nil)
+    response_headers = {
+      "Content-Type" => "application/json",
+      "Set-Cookie" => "session=new",
+      "X-Auth-Token" => "rotated-token",
+      "X-Api-Key" => "echoed-key"
+    }
+    payload = EndPointBlank::Writers::ResponseWriter.instance.payload(status: 200, headers: response_headers, body: nil)
 
-    expect(payload[:headers]).to eq("Host" => "api.example.com", "X-Request-Id" => "req-abc", "X-Api-Version" => "2")
+    expect(payload[:headers]).to eq("Content-Type" => "application/json")
   end
 
   it "keeps them available to the SDK itself" do
