@@ -37,7 +37,7 @@ module EndPointBlank
         instance.write(message, level, data)
       end
 
-      def payload(message: message, level: level, data: data)
+      def payload(message:, level:, data:)
         env = ::EndPointBlank::Rack::EnvStore.get
         uuid = request_uuid(env)
 
