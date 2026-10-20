@@ -11,7 +11,26 @@ module EndPointBlank
       # drop these before masking runs, rather than mask them, so no rule and
       # no mask_hook can bring them back. `Set-Cookie` never arrives on a
       # request; it is listed so a response record can never carry it either.
-      SENSITIVE_HEADERS = %w[authorization proxy-authorization cookie set-cookie].freeze
+      #
+      # sc-1626 added the other headers that commonly carry an API key or
+      # token. Every SDK and intake's ingest backstop drop this same set; keep
+      # them in step.
+      SENSITIVE_HEADERS = %w[
+        authorization
+        proxy-authorization
+        cookie
+        set-cookie
+        x-api-key
+        api-key
+        x-auth-token
+        x-access-token
+        x-refresh-token
+        x-amz-security-token
+        x-csrf-token
+        x-xsrf-token
+        x-goog-api-key
+        ocp-apim-subscription-key
+      ].freeze
 
       def self.extract
         env = ::EndPointBlank::Rack::EnvStore.get

@@ -13,6 +13,11 @@ RSpec.describe "Headers the writers never send" do
       "HTTP_AUTHORIZATION" => "Basic Y2xpZW50OnNlY3JldA==",
       "HTTP_PROXY_AUTHORIZATION" => "Bearer proxy-token",
       "HTTP_COOKIE" => "session=abc",
+      "HTTP_X_API_KEY" => "api-key-secret",
+      "HTTP_X_AUTH_TOKEN" => "auth-token-secret",
+      "HTTP_X_AMZ_SECURITY_TOKEN" => "amz-secret",
+      "HTTP_OCP_APIM_SUBSCRIPTION_KEY" => "subscription-secret",
+      "HTTP_X_API_VERSION" => "2",
       "HTTP_X_REQUEST_ID" => "req-abc"
     )
   end
@@ -20,22 +25,27 @@ RSpec.describe "Headers the writers never send" do
   before { EndPointBlank::Rack::EnvStore.set(env) }
   after { EndPointBlank::Rack::EnvStore.clear }
 
-  it "lists the credential and cookie headers, lower-cased and frozen" do
+  it "lists the credential, cookie, API key and token headers, lower-cased and frozen" do
     expect(EndPointBlank::Rack::Headers::SENSITIVE_HEADERS)
-      .to contain_exactly("authorization", "proxy-authorization", "cookie", "set-cookie")
+      .to contain_exactly(
+        "authorization", "proxy-authorization", "cookie", "set-cookie",
+        "x-api-key", "api-key", "x-auth-token", "x-access-token", "x-refresh-token",
+        "x-amz-security-token", "x-csrf-token", "x-xsrf-token", "x-goog-api-key",
+        "ocp-apim-subscription-key"
+      )
     expect(EndPointBlank::Rack::Headers::SENSITIVE_HEADERS).to be_frozen
   end
 
   it "leaves them out of the request record" do
     headers = EndPointBlank::Writers::RequestWriter.instance.payload[:headers]
 
-    expect(headers).to eq("Host" => "api.example.com", "X-Request-Id" => "req-abc")
+    expect(headers).to eq("Host" => "api.example.com", "X-Request-Id" => "req-abc", "X-Api-Version" => "2")
   end
 
   it "leaves them out of the response record" do
     payload = EndPointBlank::Writers::ResponseWriter.instance.payload(status: 200, headers: {}, body: nil)
 
-    expect(payload[:headers]).to eq("Host" => "api.example.com", "X-Request-Id" => "req-abc")
+    expect(payload[:headers]).to eq("Host" => "api.example.com", "X-Request-Id" => "req-abc", "X-Api-Version" => "2")
   end
 
   it "keeps them available to the SDK itself" do
