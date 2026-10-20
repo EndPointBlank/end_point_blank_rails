@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **The gem loads on Ruby 3.3 (sc-1628).** `LogWriter#payload` defaulted each
+  keyword to itself (`message: message`), which Ruby 3.3 rejects with
+  "circular argument reference" (a SyntaxError), so requiring the gem failed.
+  The keywords are now plain required keywords. `required_ruby_version` is
+  lowered from `>= 3.4.2` to `>= 3.3`, and CI runs the suite on 3.3 and 3.4.2.
+
 ## 0.14.0
 
 ### Added

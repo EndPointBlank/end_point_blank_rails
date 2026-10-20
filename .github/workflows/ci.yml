@@ -8,10 +8,15 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.3 is the gemspec's floor (sc-1628): it rejects syntax 3.4 accepts.
+        ruby-version: ['3.3', '3.4.2']
     steps:
       - uses: actions/checkout@v4
       - uses: ruby/setup-ruby@v1
         with:
-          ruby-version: '3.4.2'
+          ruby-version: ${{ matrix.ruby-version }}
       - run: ./build.sh
       - run: ./test.sh
