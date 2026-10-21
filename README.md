@@ -486,7 +486,9 @@ match; `$$` for a literal `$`). Stacktraces and log messages/data are never mask
 `log` entry in the masking field map).
 
 **Credential and cookie headers are never sent.** Before any rule runs, the request and response
-records leave out `Authorization`, `Proxy-Authorization`, `Cookie` and `Set-Cookie`, whatever
+records leave out `Authorization`, `Proxy-Authorization`, `Cookie`, `Set-Cookie`, `X-Api-Key`,
+`Api-Key`, `X-Auth-Token`, `X-Access-Token`, `X-Refresh-Token`, `X-Amz-Security-Token`,
+`X-Csrf-Token`, `X-Xsrf-Token`, `X-Goog-Api-Key` and `Ocp-Apim-Subscription-Key`, whatever
 their letter case. They are left out of the record, not masked: they are not in the payload the
 rules and hook receive. The list is `EndPointBlank::Rack::Headers::SENSITIVE_HEADERS`.
 
